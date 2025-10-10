@@ -15,7 +15,7 @@ class TrainingScheduler():
 	def __init__(self, opt: OptimizationParams, pipe: PipelineParams, gaussians: GaussianModel, original_images: list) -> None:
 
 		self.max_steps = opt.iterations
-		self.init_n_gaussian = gaussians.get_xyz.shape[0]
+		self.init_n_gaussian = gaussians.get_anchor.shape[0] * 5
 
 		self.densify_mode = pipe.densify_mode
 		self.densify_until_iter = opt.densify_until_iter
@@ -45,12 +45,16 @@ class TrainingScheduler():
 		# Generate schedulers.
 		self.init_reso_scheduler(original_images)
 
-		if self.resolution_mode == "freq":
-			gaussians.xyz_scheduler_args = get_expon_lr_func(lr_init=opt.position_lr_init*gaussians.spatial_lr_scale, 
-													         lr_final=opt.position_lr_final*gaussians.spatial_lr_scale, 
-															 lr_delay_mult=opt.position_lr_delay_mult, 
-															 max_steps=opt.position_lr_max_steps, 
-															 decay_from_iter=self.lr_decay_from_iter())
+		# if self.resolution_mode == "freq":
+			# gaussians.xyz_scheduler_args = get_expon_lr_func(lr_init=opt.position_lr_init*gaussians.spatial_lr_scale, 
+			# 										         lr_final=opt.position_lr_final*gaussians.spatial_lr_scale, 
+			# 												 lr_delay_mult=opt.position_lr_delay_mult, 
+			# 												 max_steps=opt.position_lr_max_steps, 
+			# 												 decay_from_iter=self.lr_decay_from_iter())
+			# gaussians.offset_scheduler_args = get_expon_lr_func(lr_init=opt.offset_lr_init*self.spatial_lr_scale,
+            #                                         lr_final=opt.offset_lr_final*self.spatial_lr_scale,
+            #                                         lr_delay_mult=opt.offset_lr_delay_mult,
+            #                                         max_steps=opt.offset_lr_max_steps)
 	
 	def update_momentum(self, momentum_step):
 		if self.momentum == -1:

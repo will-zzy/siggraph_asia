@@ -211,7 +211,7 @@ class GaussianRasterizer(nn.Module):
             raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
         
         if dc is None:
-            dc = torch.Tensor([])
+            dc = torch.Tensor([]) # ?
         if shs is None:
             shs = torch.Tensor([])
         if colors_precomp is None:
@@ -237,6 +237,33 @@ class GaussianRasterizer(nn.Module):
             cov3D_precomp,
             raster_settings
         )
+    def visible_filter(self, means3D, scales = None, rotations = None, cov3D_precomp = None):
+        
+        raster_settings = self.raster_settings
+
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        # Invoke C++/CUDA rasterization routine
+        with torch.no_grad():
+            radii = _C.rasterize_aussians_filter(means3D,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3D_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            raster_settings.prefiltered,
+            raster_settings.debug)
+        return  radii
 
 class SparseGaussianAdam(torch.optim.Adam):
     def __init__(self, params, lr, eps):

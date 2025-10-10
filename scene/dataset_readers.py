@@ -84,12 +84,18 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, depths_params, images_fold
         uid = intr.id
         R = np.transpose(qvec2rotmat(extr.qvec))
         T = np.array(extr.tvec)
-
+        # print("model:", intr.model)
+        # print(intr.params)
         if intr.model=="SIMPLE_PINHOLE":
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)
             FovX = focal2fov(focal_length_x, width)
         elif intr.model=="PINHOLE":
+            focal_length_x = intr.params[0]
+            focal_length_y = intr.params[1]
+            FovY = focal2fov(focal_length_y, height)
+            FovX = focal2fov(focal_length_x, width)
+        elif intr.model=="SIMPLE_RADIAL":
             focal_length_x = intr.params[0]
             focal_length_y = intr.params[1]
             FovY = focal2fov(focal_length_y, height)
@@ -117,14 +123,25 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, depths_params, images_fold
     sys.stdout.write('\n')
     return cam_infos
 
+# def fetchPly(path):
+#     plydata = PlyData.read(path)
+#     vertices = plydata['vertex']
+#     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
+#     colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+#     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
+#     return BasicPointCloud(points=positions, colors=colors, normals=normals)
+
+
 def fetchPly(path):
     plydata = PlyData.read(path)
     vertices = plydata['vertex']
     positions = np.vstack([vertices['x'], vertices['y'], vertices['z']]).T
-    colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+    try:
+        colors = np.vstack([vertices['red'], vertices['green'], vertices['blue']]).T / 255.0
+    except:
+        colors = np.random.rand(positions.shape[0], positions.shape[1])
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
-
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array
     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
@@ -212,10 +229,10 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
         except:
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
+    # try:
+    pcd = fetchPly(ply_path)
+    # except:
+    #     pcd = None
 
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,

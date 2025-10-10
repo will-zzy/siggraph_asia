@@ -14,30 +14,30 @@ import numpy as np
 from utils.graphics_utils import fov2focal
 from PIL import Image
 import cv2
-
+from tqdm import tqdm
 WARNED = False
 
 def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dataset):
     image = Image.open(cam_info.image_path)
+    invdepthmap = None
+    # if cam_info.depth_path != "":
+    #     try:
+    #         if is_nerf_synthetic:
+    #             invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / 512
+    #         else:
+    #             invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / float(2**16)
 
-    if cam_info.depth_path != "":
-        try:
-            if is_nerf_synthetic:
-                invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / 512
-            else:
-                invdepthmap = cv2.imread(cam_info.depth_path, -1).astype(np.float32) / float(2**16)
-
-        except FileNotFoundError:
-            print(f"Error: The depth file at path '{cam_info.depth_path}' was not found.")
-            raise
-        except IOError:
-            print(f"Error: Unable to open the image file '{cam_info.depth_path}'. It may be corrupted or an unsupported format.")
-            raise
-        except Exception as e:
-            print(f"An unexpected error occurred when trying to read depth at {cam_info.depth_path}: {e}")
-            raise
-    else:
-        invdepthmap = None
+    #     except FileNotFoundError:
+    #         print(f"Error: The depth file at path '{cam_info.depth_path}' was not found.")
+    #         raise
+    #     except IOError:
+    #         print(f"Error: Unable to open the image file '{cam_info.depth_path}'. It may be corrupted or an unsupported format.")
+    #         raise
+    #     except Exception as e:
+    #         print(f"An unexpected error occurred when trying to read depth at {cam_info.depth_path}: {e}")
+    #         raise
+    # else:
+    #     invdepthmap = None
         
     orig_w, orig_h = image.size
     if args.resolution in [1, 2, 4, 8]:
@@ -69,7 +69,7 @@ def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dat
 def cameraList_from_camInfos(cam_infos, resolution_scale, args, is_nerf_synthetic, is_test_dataset):
     camera_list = []
 
-    for id, c in enumerate(cam_infos):
+    for id, c in tqdm(enumerate(cam_infos)):
         camera_list.append(loadCam(args, id, c, resolution_scale, is_nerf_synthetic, is_test_dataset))
 
     return camera_list

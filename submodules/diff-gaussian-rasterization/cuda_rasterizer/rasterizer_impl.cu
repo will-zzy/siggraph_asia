@@ -115,77 +115,108 @@ __global__ void checkFrustum(int P,
 	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, false, p_view);
 }
 
+
 // Generates one key/value pair for all Gaussian / tile overlaps. 
 // Run once per Gaussian (1:N mapping).
+// __global__ void duplicateWithKeys(
+// 	int P,
+// 	const float2* points_xy,
+// 	const float4* __restrict__ conic_opacity,
+// 	const float* depths,
+// 	const uint32_t* offsets,
+// 	uint64_t* gaussian_keys_unsorted,
+// 	uint32_t* gaussian_values_unsorted,
+// 	int* radii,
+// 	dim3 grid,
+// 	int2* rects)
+// {
+// 	auto idx = cg::this_grid().thread_rank();
+// 	if (idx >= P)
+// 		return;
+
+// 	// Generate no key/value pair for invisible Gaussians
+// 	if (radii[idx] > 0)
+// 	{
+// 		// Find this Gaussian's offset in buffer for writing keys/values.
+// 		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
+// 		const uint32_t offset_to = offsets[idx];
+// 		uint2 rect_min, rect_max;
+
+// 		if(rects == nullptr)
+// 			getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
+// 		else
+// 			getRect(points_xy[idx], rects[idx], rect_min, rect_max, grid);
+
+// 		const float2 xy = points_xy[idx];
+// 		const float4 co = conic_opacity[idx];
+// 		const float opacity_threshold = 1.0f / 255.0f;
+// 		const float opacity_factor_threshold = logf(co.w / opacity_threshold);
+
+// 		// For each tile that the bounding rect overlaps, emit a 
+// 		// key/value pair. The key is |  tile ID  |      depth      |,
+// 		// and the value is the ID of the Gaussian. Sorting the values 
+// 		// with this key yields Gaussian IDs in a list, such that they
+// 		// are first sorted by tile and then by depth. 
+// 		for (int y = rect_min.y; y < rect_max.y; y++)
+// 		{
+// 			for (int x = rect_min.x; x < rect_max.x; x++)
+// 			{
+// 				const glm::vec2 tile_min(x * BLOCK_X, y * BLOCK_Y);
+// 				const glm::vec2 tile_max((x + 1) * BLOCK_X - 1, (y + 1) * BLOCK_Y - 1);
+
+// 				glm::vec2 max_pos;
+// 				float max_opac_factor = 0.0f;
+// 				max_opac_factor = max_contrib_power_rect_gaussian_float<BLOCK_X-1, BLOCK_Y-1>(co, xy, tile_min, tile_max, max_pos);
+				
+// 				uint64_t key = y * grid.x + x;
+// 				key <<= 32;
+// 				key |= *((uint32_t*)&depths[idx]);
+// 				if (max_opac_factor <= opacity_factor_threshold) {
+// 				gaussian_keys_unsorted[off] = key;
+// 				gaussian_values_unsorted[off] = idx;
+// 				off++;
+// 			}
+// 		}
+// 	}
+
+// 		for (; off < offset_to; ++off) {
+// 			uint64_t key = (uint32_t) -1;
+// 			key <<= 32;
+// 			const float depth = FLT_MAX;
+// 			key |= *((uint32_t*)&depth);
+// 			gaussian_values_unsorted[off] = static_cast<uint32_t>(-1);
+// 			gaussian_keys_unsorted[off] = key;
+// 		}
+// 	}
+// }
+
 __global__ void duplicateWithKeys(
 	int P,
 	const float2* points_xy,
-	const float4* __restrict__ conic_opacity,
 	const float* depths,
 	const uint32_t* offsets,
 	uint64_t* gaussian_keys_unsorted,
 	uint32_t* gaussian_values_unsorted,
-	int* radii,
-	dim3 grid,
-	int2* rects)
+	float4* con_o,
+  	uint32_t* tiles_touched,
+	dim3 grid)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
 		return;
 
 	// Generate no key/value pair for invisible Gaussians
-	if (radii[idx] > 0)
+	if (tiles_touched[idx] > 0)
 	{
-		// Find this Gaussian's offset in buffer for writing keys/values.
-		uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
-		const uint32_t offset_to = offsets[idx];
-		uint2 rect_min, rect_max;
-
-		if(rects == nullptr)
-			getRect(points_xy[idx], radii[idx], rect_min, rect_max, grid);
-		else
-			getRect(points_xy[idx], rects[idx], rect_min, rect_max, grid);
-
-		const float2 xy = points_xy[idx];
-		const float4 co = conic_opacity[idx];
-		const float opacity_threshold = 1.0f / 255.0f;
-		const float opacity_factor_threshold = logf(co.w / opacity_threshold);
-
-		// For each tile that the bounding rect overlaps, emit a 
-		// key/value pair. The key is |  tile ID  |      depth      |,
-		// and the value is the ID of the Gaussian. Sorting the values 
-		// with this key yields Gaussian IDs in a list, such that they
-		// are first sorted by tile and then by depth. 
-		for (int y = rect_min.y; y < rect_max.y; y++)
-		{
-			for (int x = rect_min.x; x < rect_max.x; x++)
-			{
-				const glm::vec2 tile_min(x * BLOCK_X, y * BLOCK_Y);
-				const glm::vec2 tile_max((x + 1) * BLOCK_X - 1, (y + 1) * BLOCK_Y - 1);
-
-				glm::vec2 max_pos;
-				float max_opac_factor = 0.0f;
-				max_opac_factor = max_contrib_power_rect_gaussian_float<BLOCK_X-1, BLOCK_Y-1>(co, xy, tile_min, tile_max, max_pos);
-				
-				uint64_t key = y * grid.x + x;
-				key <<= 32;
-				key |= *((uint32_t*)&depths[idx]);
-				if (max_opac_factor <= opacity_factor_threshold) {
-				gaussian_keys_unsorted[off] = key;
-				gaussian_values_unsorted[off] = idx;
-				off++;
-			}
-		}
-	}
-
-		for (; off < offset_to; ++off) {
-			uint64_t key = (uint32_t) -1;
-			key <<= 32;
-			const float depth = FLT_MAX;
-			key |= *((uint32_t*)&depth);
-			gaussian_values_unsorted[off] = static_cast<uint32_t>(-1);
-			gaussian_keys_unsorted[off] = key;
-		}
+	// Find this Gaussian's offset in buffer for writing keys/values.
+	uint32_t off = (idx == 0) ? 0 : offsets[idx - 1];
+    // Update unsorted arrays with Gaussian idx for every tile that
+    // Gaussian touches
+    duplicateToTilesTouched(
+        points_xy[idx], con_o[idx], grid,
+        idx, off, depths[idx],
+        gaussian_keys_unsorted,
+        gaussian_values_unsorted);
 	}
 }
 
@@ -383,7 +414,8 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	{
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
 	}
-
+	// if (colors_precomp != nullptr)
+	// 	printf("""Using precomputed Gaussian colors!\n");
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
@@ -428,18 +460,32 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
+	// duplicateWithKeys << <(P + 255) / 256, 256 >> > (
+	// 	P,
+	// 	geomState.means2D,
+	// 	geomState.conic_opacity,
+	// 	geomState.depths,
+	// 	geomState.point_offsets,
+	// 	binningState.point_list_keys_unsorted,
+	// 	binningState.point_list_unsorted,
+	// 	radii,
+	// 	tile_grid,
+	// 	nullptr)
+	// CHECK_CUDA(, debug)
+
+
 	duplicateWithKeys << <(P + 255) / 256, 256 >> > (
 		P,
 		geomState.means2D,
-		geomState.conic_opacity,
 		geomState.depths,
 		geomState.point_offsets,
 		binningState.point_list_keys_unsorted,
 		binningState.point_list_unsorted,
-		radii,
-		tile_grid,
-		nullptr)
+		geomState.conic_opacity,
+        geomState.tiles_touched,
+		tile_grid)
 	CHECK_CUDA(, debug)
+
 
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
@@ -474,6 +520,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,
@@ -496,6 +543,67 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(cudaMemcpy(imgState.pixel_invDepths, invdepth, sizeof(float) * width * height, cudaMemcpyDeviceToDevice), debug);
 	return std::make_tuple(num_rendered, bucket_sum);
 }
+
+
+void CudaRasterizer::Rasterizer::visible_filter(
+	std::function<char* (size_t)> geometryBuffer,
+	std::function<char* (size_t)> binningBuffer,
+	std::function<char* (size_t)> imageBuffer,
+	const int P, int M,
+	const int width, int height,
+	const float* means3D,
+	const float* scales,
+	const float scale_modifier,
+	const float* rotations,
+	const float* cov3D_precomp,
+	const float* viewmatrix,
+	const float* projmatrix,
+	const float tan_fovx, float tan_fovy,
+	const bool prefiltered,
+	int* radii,
+	bool debug)
+{
+	const float focal_y = height / (2.0f * tan_fovy);
+	const float focal_x = width / (2.0f * tan_fovx);
+
+	size_t chunk_size = required<GeometryState>(P);
+	char* chunkptr = geometryBuffer(chunk_size);
+	GeometryState geomState = GeometryState::fromChunk(chunkptr, P);
+
+	if (radii == nullptr)
+	{
+		radii = geomState.internal_radii;
+	}
+
+	dim3 tile_grid((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y, 1);
+	// dim3 block(BLOCK_X, BLOCK_Y, 1);
+
+	// Dynamically resize image-based auxiliary buffers during training
+	size_t img_chunk_size = required<ImageState>(width * height);
+	char* img_chunkptr = imageBuffer(img_chunk_size);
+	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
+
+	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
+	CHECK_CUDA(FORWARD::filter_preprocess(
+		P, M,
+		means3D,
+		(glm::vec3*)scales,
+		scale_modifier,
+		(glm::vec4*)rotations,
+		cov3D_precomp,
+		viewmatrix, projmatrix,
+		width, height,
+		focal_x, focal_y,
+		tan_fovx, tan_fovy,
+		radii,
+		geomState.cov3D,
+		tile_grid,
+		prefiltered
+	), debug)
+
+}
+
+
 
 // Produce necessary gradients for optimization, corresponding
 // to forward render pass
