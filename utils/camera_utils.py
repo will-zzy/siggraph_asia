@@ -9,15 +9,16 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from scene.cameras import Camera
 import numpy as np
 from utils.graphics_utils import fov2focal
 from PIL import Image
 import cv2
 from tqdm import tqdm
+import torch
 WARNED = False
 
 def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dataset):
+    from scene.cameras import Camera
     image = Image.open(cam_info.image_path)
     invdepthmap = None
     # if cam_info.depth_path != "":
@@ -74,7 +75,7 @@ def cameraList_from_camInfos(cam_infos, resolution_scale, args, is_nerf_syntheti
 
     return camera_list
 
-def camera_to_JSON(id, camera : Camera):
+def camera_to_JSON(id, camera):
     Rt = np.zeros((4, 4))
     Rt[:3, :3] = camera.R.transpose()
     Rt[:3, 3] = camera.T
@@ -95,3 +96,82 @@ def camera_to_JSON(id, camera : Camera):
         'fx' : fov2focal(camera.FovX, camera.width)
     }
     return camera_entry
+
+
+def SO3_exp(theta):
+    device = theta.device
+    dtype = theta.dtype
+
+    W = skew_sym_mat(theta)
+    W2 = W @ W
+    angle = torch.norm(theta)
+    I = torch.eye(3, device=device, dtype=dtype)
+    if angle < 1e-5:
+        return I + W + 0.5 * W2
+    else:
+        return (
+            I
+            + (torch.sin(angle) / angle) * W
+            + ((1 - torch.cos(angle)) / (angle**2)) * W2
+        )
+
+def skew_sym_mat(x):
+    device = x.device
+    dtype = x.dtype
+    ssm = torch.zeros(3, 3, device=device, dtype=dtype)
+    ssm[0, 1] = -x[2]
+    ssm[0, 2] = x[1]
+    ssm[1, 0] = x[2]
+    ssm[1, 2] = -x[0]
+    ssm[2, 0] = -x[1]
+    ssm[2, 1] = x[0]
+    return ssm
+
+def V(theta):
+    dtype = theta.dtype
+    device = theta.device
+    I = torch.eye(3, device=device, dtype=dtype)
+    W = skew_sym_mat(theta)
+    W2 = W @ W
+    angle = torch.norm(theta)
+    if angle < 1e-5:
+        V = I + 0.5 * W + (1.0 / 6.0) * W2
+    else:
+        V = (
+            I
+            + W * ((1.0 - torch.cos(angle)) / (angle**2))
+            + W2 * ((angle - torch.sin(angle)) / (angle**3))
+        )
+    return V
+
+def SE3_exp(tau):
+    dtype = tau.dtype
+    device = tau.device
+
+    rho = tau[:3]
+    theta = tau[3:]
+    R = SO3_exp(theta)
+    t = V(theta) @ rho
+
+    T = torch.eye(4, device=device, dtype=dtype)
+    T[:3, :3] = R
+    T[:3, 3] = t
+    return T
+def update_pose(camera, converged_threshold=1e-4):
+    tau = torch.cat([camera.cam_trans_delta, camera.cam_rot_delta], axis=0)
+
+    T_w2c = torch.eye(4, device=tau.device)
+    R_pose = camera.R # 注意camera里的R是W2C.R的转置
+    T_w2c[0:3, 0:3] = R_pose.T
+    T_w2c[0:3, 3] = camera.T
+
+    new_w2c = SE3_exp(tau) @ T_w2c
+
+    new_R = new_w2c[0:3, 0:3]
+    new_T = new_w2c[0:3, 3]
+
+    converged = tau.norm() < converged_threshold
+    camera.update_RT(new_R.T, new_T) # 记得转回去
+    camera.cam_rot_delta.data.fill_(0)
+    camera.cam_trans_delta.data.fill_(0)
+    return converged

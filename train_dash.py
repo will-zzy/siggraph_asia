@@ -12,6 +12,7 @@ import torchvision.transforms.functional as tf
 import lpips
 from random import randint
 from utils.loss_utils import l1_loss, ssim
+from utils.camera_utils import update_pose
 # from gaussian_renderer import render, network_gui
 from gaussian_renderer import prefilter_voxel, render, network_gui
 import sys
@@ -229,6 +230,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # else:
                 gaussians.optimizer.step()
                 gaussians.optimizer.zero_grad(set_to_none = True)
+                viewpoint_cam.pose_optimizer.step()
+                viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
 
             # optim_end.record()
             # torch.cuda.synchronize()
@@ -238,7 +241,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-    
+            if iteration > 2000 and iteration % 100 == 0:
+                # update_pose(viewpoint_cam)
+                for view in scene.getTrainCameras():
+                    update_pose(view)
     with open(os.path.join(scene.model_path, "TRAIN_INFO"), "w+") as f:
         # f.write("Training Time: {:.2f} seconds, {:.2f} minutes\n".format(total_time, total_time / 60.))
         f.write("GS Number: {}\n".format(gaussians.get_anchor.shape[0]))
@@ -309,7 +315,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 if tb_writer:
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
-
+                
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_anchor.shape[0], iteration)

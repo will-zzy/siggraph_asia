@@ -167,7 +167,6 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_rho = grad_tau[:3].view(1, -1)
         grad_theta = grad_tau[3:].view(1, -1)
         
-        
         grads = (
             grad_means3D,
             grad_means2D,

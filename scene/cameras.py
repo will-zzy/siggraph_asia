@@ -26,19 +26,39 @@ class Camera(nn.Module):
 
         self.uid = uid
         self.colmap_id = colmap_id
-        self.R = R
-        self.T = T
+        # self.R = R
+        # self.T = T
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
-
+        
+        
+        
         try:
             self.data_device = torch.device(data_device)
         except Exception as e:
             print(e)
             print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
             self.data_device = torch.device("cuda")
-
+        
+        self.R = torch.tensor(R, device=self.data_device).float()
+        self.T = torch.tensor(T, device=self.data_device).float()
+        # 位姿优化
+        self.cam_rot_delta = nn.Parameter(
+            torch.zeros(3, requires_grad=True, device=self.data_device)
+        )
+        self.cam_trans_delta = nn.Parameter(
+            torch.zeros(3, requires_grad=True, device=self.data_device)
+        )
+        
+        l = [ 
+            {'params': [self.cam_rot_delta], 'lr': 0.00008, "name": "pose_rot_delta"}, # 0.00003
+            {'params': [self.cam_trans_delta], 'lr': 0.00005, "name": "pose_trans_delta"}, # 0.00001
+        ]
+        
+        self.pose_optimizer = torch.optim.Adam(l)
+        
+        
         resized_image_rgb = PILtoTorch(image, resolution)
         gt_image = resized_image_rgb[:3, ...]
         self.alpha_mask = None
@@ -83,10 +103,28 @@ class Camera(nn.Module):
         self.trans = trans
         self.scale = scale
 
-        self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
+        # self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
-        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
-        self.camera_center = self.world_view_transform.inverse()[3, :3]
+        # self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        # self.camera_center = self.world_view_transform.inverse()[3, :3]
+    def update_RT(self, R, t):
+        self.R = R.to(device=self.data_device)
+        self.T = t.to(device=self.data_device)
+        
+    @property
+    def world_view_transform(self):
+        return getWorld2View2(self.R, self.T).transpose(0, 1)
+    
+    @property
+    def full_proj_transform(self):
+        return (
+            self.world_view_transform.unsqueeze(0).bmm(
+                self.projection_matrix.unsqueeze(0)
+            )
+        ).squeeze(0)
+    @property
+    def camera_center(self):
+        return self.world_view_transform.inverse()[3, :3]
         
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
