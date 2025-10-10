@@ -71,6 +71,7 @@ namespace CudaRasterizer
 			const float* cov3D_precomp,
 			const float* viewmatrix,
 			const float* projmatrix,
+            const float* projmatrix_raw,
 			const float* campos,
 			const float tan_fovx, float tan_fovy,
 			const int* radii,
@@ -91,6 +92,7 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
+			float* dL_dtau,
 			bool antialiasing,
 			bool debug);
 		static void visible_filter(

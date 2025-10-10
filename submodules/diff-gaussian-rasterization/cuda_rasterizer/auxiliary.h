@@ -11,7 +11,7 @@
 
 #ifndef CUDA_RASTERIZER_AUXILIARY_H_INCLUDED
 #define CUDA_RASTERIZER_AUXILIARY_H_INCLUDED
-
+#include <float.h>
 #include "config.h"
 #include "stdio.h"
 #include <stdint.h>
@@ -251,7 +251,7 @@ __device__ inline uint32_t processTiles( // TBC
         // Starting from the bottom or left, we will only need to compute
         // intersections at the next line.
         max_line = min_line + BLOCK_U;
-        if (max_line <= bbox_max.x) {
+        if (max_line <= bbox_max.x) { // 如果当前列的右边界在紧凑bbox右边界之左（当前tile没有囊括椭圆的右弧），则计算max_line与椭圆的交点
           intersect_max_line = computeEllipseIntersection(
                     con_o, disc, t, p, isY, max_line);
         }
@@ -259,24 +259,24 @@ __device__ inline uint32_t processTiles( // TBC
         // If the bbox min is in this slice, then it is the minimum
         // ellipse point in this slice. Otherwise, the minimum ellipse
         // point will be the minimum of the intersections of the min/max lines.
-        if (min_line <= bbox_argmin.y && bbox_argmin.y < max_line) {
-          ellipse_min = bbox_min.y;
+        if (min_line <= bbox_argmin.y && bbox_argmin.y < max_line) { // 如果当前tile的左边界比 椭圆上切点更左
+            ellipse_min = bbox_min.y; // 则更新ellipse_min为椭圆上切线，因为上切线肯定是当前列的上边界
         } else {
-          ellipse_min = min(intersect_min_line.x, intersect_max_line.x);
+            ellipse_min = min(intersect_min_line.x, intersect_max_line.x); // 否则比较tile左边界与椭圆的上交点和tile右边界与椭圆的上交点，取更小的那个
         }
 
         // If the bbox max is in this slice, then it is the maximum
         // ellipse point in this slice. Otherwise, the maximum ellipse
         // point will be the maximum of the intersections of the min/max lines.
-        if (min_line <= bbox_argmax.y && bbox_argmax.y < max_line) {
-          ellipse_max = bbox_max.y;
+        if (min_line <= bbox_argmax.y && bbox_argmax.y < max_line) { // 同理，对下也是如此处理，从而确定该列tiles有哪些tile需要写入
+            ellipse_max = bbox_max.y;
         } else {
-          ellipse_max = max(intersect_min_line.y, intersect_max_line.y);
+            ellipse_max = max(intersect_min_line.y, intersect_max_line.y);
         }
 
         // Convert ellipse_min/ellipse_max to tiles touched
         // First map back to tile coordinates, then subtract.
-        int min_tile_v = max(rect_min.y,
+        int min_tile_v = max(rect_min.y, // 取原本bbox的上边界与当前列最上tile边界（由rect_max确保安全值）的最小值为起始
             min(rect_max.y, (int)(ellipse_min / BLOCK_V))
             );
         int max_tile_v = min(rect_max.y,
@@ -286,21 +286,21 @@ __device__ inline uint32_t processTiles( // TBC
         tiles_count += max_tile_v - min_tile_v;
         // Only update keys array if it exists.
         if (gaussian_keys_unsorted != nullptr) {
-          // Loop over tiles and add to keys array
-          for (int v = min_tile_v; v < max_tile_v; v++)
-          {
-            // For each tile that the Gaussian overlaps, emit a
-            // key/value pair. The key is |  tile ID  |      depth      |,
-            // and the value is the ID of the Gaussian. Sorting the values
-            // with this key yields Gaussian IDs in a list, such that they
-            // are first sorted by tile and then by depth.
-            uint64_t key = isY ?  (u * grid.x + v) : (v * grid.x + u);
-            key <<= 32;
-            key |= *((uint32_t*)&depth);
-            gaussian_keys_unsorted[off] = key;
-            gaussian_values_unsorted[off] = idx;
-            off++;
-          }
+            // Loop over tiles and add to keys array
+            for (int v = min_tile_v; v < max_tile_v; v++)
+            {
+                // For each tile that the Gaussian overlaps, emit a
+                // key/value pair. The key is |  tile ID  |      depth      |,
+                // and the value is the ID of the Gaussian. Sorting the values
+                // with this key yields Gaussian IDs in a list, such that they
+                // are first sorted by tile and then by depth.
+                uint64_t key = isY ?  (u * grid.x + v) : (v * grid.x + u);
+                key <<= 32;
+                key |= *((uint32_t*)&depth);
+                gaussian_keys_unsorted[off] = key;
+                gaussian_values_unsorted[off] = idx;
+                off++;
+            }
         }
         // Max line of this tile slice will be min lin of next tile slice
         intersect_min_line = intersect_max_line;
@@ -337,16 +337,16 @@ __device__ inline uint32_t duplicateToTilesTouched(
     float y_term = sqrt(-(con_o.y * con_o.y * t) / (disc * con_o.z));
     y_term = (con_o.y < 0) ? y_term : -y_term;
 
-    float2 bbox_argmin = { p.y - y_term, p.x - x_term }; // 以p为中心，x_term,y_term为半径的bbox
+    float2 bbox_argmin = { p.y - y_term, p.x - x_term }; // 以投影点p为中心，x_term, y_term为半径的bbox (上边界和左边界)
     float2 bbox_argmax = { p.y + y_term, p.x + x_term };
 
     float2 bbox_min = { // 这里为什么要重新算一遍intersection，不能直接把preprocess的结果传进来吗？
-      computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmin.x).x, // 上边界
-      computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmin.y).x // 左边界
+      computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmin.x).x, // 左边界
+      computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmin.y).x // 上边界
     };
     float2 bbox_max = {
-      computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmax.x).y, // 下边界
-      computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmax.y).y // 右边界
+      computeEllipseIntersection(con_o, disc, t, p, true, bbox_argmax.x).y, // 右边界
+      computeEllipseIntersection(con_o, disc, t, p, false, bbox_argmax.y).y // 下边界
     };
 
     // Rectangular tile extent of ellipse
@@ -391,3 +391,13 @@ throw std::runtime_error(cudaGetErrorString(ret)); \
 }
 
 #endif
+
+
+#define KSYNC(tag) do {                                      \
+  cudaError_t _e = cudaDeviceSynchronize();                  \
+  if (_e != cudaSuccess) {                                   \
+    fprintf(stderr, "[%s] CUDA error: %s\n", tag,            \
+            cudaGetErrorString(_e));                         \
+    return std::make_tuple(0, 0);                            \
+  }                                                          \
+} while(0)

@@ -243,7 +243,7 @@ __global__ void identifyTileRanges(int L, uint64_t* point_list_keys, uint2* rang
 		{
 			ranges[prevtile].y = idx;
 			if (valid_tile) 
-			ranges[currtile].x = idx;
+				ranges[currtile].x = idx;
 		}
 	}
 	if (idx == L - 1 && valid_tile)
@@ -445,7 +445,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 		prefiltered,
 		antialiasing
 	), debug)
-
+	KSYNC("preprocess");
 	// Compute prefix sum over full list of touched tile counts by Gaussians
 	// E.g., [2, 3, 0, 2, 1] -> [2, 5, 5, 7, 8]
 	CHECK_CUDA(cub::DeviceScan::InclusiveSum(geomState.scanning_space, geomState.scan_size, geomState.tiles_touched, geomState.point_offsets, P), debug)
@@ -457,7 +457,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	size_t binning_chunk_size = required<BinningState>(num_rendered);
 	char* binning_chunkptr = binningBuffer(binning_chunk_size);
 	BinningState binningState = BinningState::fromChunk(binning_chunkptr, num_rendered);
-
+	
 	// For each instance to be rendered, produce adequate [ tile | depth ] key 
 	// and corresponding dublicated Gaussian indices to be sorted
 	// duplicateWithKeys << <(P + 255) / 256, 256 >> > (
@@ -486,7 +486,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 		tile_grid)
 	CHECK_CUDA(, debug)
 
-
+	KSYNC("duplicateWithKeys");
 	int bit = getHigherMsb(tile_grid.x * tile_grid.y);
 
 	// Sort complete list of (duplicated) Gaussian indices by keys
@@ -506,6 +506,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 			binningState.point_list_keys,
 			imgState.ranges);
 	CHECK_CUDA(, debug)
+	KSYNC("identifyTileRanges");
 
  	// bucket count
 	int num_tiles = tile_grid.x * tile_grid.y;
@@ -539,6 +540,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 		geomState.depths,
 		invdepth), debug)
 
+	KSYNC("renderCUDA");
 	CHECK_CUDA(cudaMemcpy(imgState.pixel_colors, out_color, sizeof(float) * width * height * NUM_CHANNELS_3DGS, cudaMemcpyDeviceToDevice), debug);
 	CHECK_CUDA(cudaMemcpy(imgState.pixel_invDepths, invdepth, sizeof(float) * width * height, cudaMemcpyDeviceToDevice), debug);
 	return std::make_tuple(num_rendered, bucket_sum);
@@ -622,6 +624,7 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* cov3D_precomp,
 	const float* viewmatrix,
 	const float* projmatrix,
+    const float* projmatrix_raw,
 	const float* campos,
 	const float tan_fovx, float tan_fovy,
 	const int* radii,
@@ -642,6 +645,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
+	float* dL_dtau,
 	bool antialiasing,
 	bool debug)
 {
@@ -711,6 +715,7 @@ void CudaRasterizer::Rasterizer::backward(
 		cov3D_ptr,
 		viewmatrix,
 		projmatrix,
+        projmatrix_raw,
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		(glm::vec3*)campos,
@@ -725,5 +730,6 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dsh,
 		(glm::vec3*)dL_dscale,
 		(glm::vec4*)dL_drot,
+		dL_dtau, 
 		antialiasing), debug)
 }

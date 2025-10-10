@@ -152,6 +152,7 @@ def render(viewpoint_camera,
         scale_modifier=scaling_modifier,
         viewmatrix=viewpoint_camera.world_view_transform,
         projmatrix=viewpoint_camera.full_proj_transform,
+        projmatrix_raw=viewpoint_camera.projection_matrix,
         # sh_degree=pc.active_sh_degree,
         sh_degree=1, # 可以不用球谐
         campos=viewpoint_camera.camera_center,
@@ -198,6 +199,7 @@ def render(viewpoint_camera,
     #     colors_precomp = override_color
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+    
     if separate_sh:
         rendered_image, radii, depth_image = rasterizer(
             means3D = xyz,
@@ -211,7 +213,9 @@ def render(viewpoint_camera,
             opacities = opacity,
             scales = scales,
             rotations = rotations,
-            cov3D_precomp = None)
+            cov3D_precomp = None,
+            theta=None,
+            rho=None)
     else:
         rendered_image, radii, depth_image = rasterizer(
             means3D = xyz,
@@ -223,7 +227,9 @@ def render(viewpoint_camera,
             opacities = opacity,
             scales = scales,
             rotations = rotations,
-            cov3D_precomp = None)
+            cov3D_precomp = None,
+            theta=None,
+            rho=None)
         
     # Apply exposure to rendered image (training only)
     # if use_trained_exp:
@@ -279,6 +285,7 @@ def prefilter_voxel(viewpoint_camera,
         scale_modifier=scaling_modifier,
         viewmatrix=viewpoint_camera.world_view_transform,
         projmatrix=viewpoint_camera.full_proj_transform,
+        projmatrix_raw=viewpoint_camera.projection_matrix,
         sh_degree=1,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,

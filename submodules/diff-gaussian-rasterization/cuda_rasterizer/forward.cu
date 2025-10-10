@@ -402,6 +402,7 @@ renderCUDA(
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 
 			expected_invdepth += (1.f / depths[collected_id[j]]) * alpha * T;
+			// expected_invdepth += (depths[collected_id[j]]) * alpha * T;
 
 			T = test_T;
 

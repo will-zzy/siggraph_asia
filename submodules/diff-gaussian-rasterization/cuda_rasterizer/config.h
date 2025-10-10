@@ -15,5 +15,5 @@
 #define NUM_CHANNELS_3DGS 3 // Default 3, RGB
 #define BLOCK_X 16
 #define BLOCK_Y 16
-
+#define INVALID_TILE_ID (-1U)
 #endif
