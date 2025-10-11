@@ -35,22 +35,48 @@ def getWorld2View(R, t):
     Rt[3, 3] = 1.0
     return np.float32(Rt)
 
-def getWorld2View2(R, t, translate=torch.tensor([0.0, 0.0, 0.0]), scale=1.0):
-    translate = translate.to(R.device)
-    Rt = torch.zeros((4, 4), device=R.device)
-    # Rt[:3, :3] = R.transpose()
-    Rt[:3, :3] = R.T # 注意camera里的R是W2C.R的转置
-    Rt[:3, 3] = t
-    Rt[3, 3] = 1.0
+# def getWorld2View2(R, t, translate=torch.tensor([0.0, 0.0, 0.0]), scale=1.0):
+#     translate = translate.to(R.device)
+#     Rt = torch.zeros((4, 4), device=R.device)
+#     # Rt[:3, :3] = R.transpose()
+#     Rt[:3, :3] = R.T # 注意camera里的R是W2C.R的转置
+#     Rt[:3, 3] = t
+#     Rt[3, 3] = 1.0
 
-    C2W = torch.linalg.inv(Rt)
-    cam_center = C2W[:3, 3]
-    cam_center = (cam_center + translate) * scale
-    # cam_center = (cam_center)
-    C2W[:3, 3] = cam_center
-    Rt = torch.linalg.inv(C2W)
-    return Rt
+#     C2W = torch.linalg.inv(Rt)
+#     cam_center = C2W[:3, 3]
+#     cam_center = (cam_center + translate) * scale
+#     # cam_center = (cam_center)
+#     C2W[:3, 3] = cam_center
+#     Rt = torch.linalg.inv(C2W)
+#     return Rt
+@torch.no_grad()
+def getWorld2View2(R, t, translate=None, scale=1.0):
+    """
+    R: 你类里存的 R（按你的注释，是 W2C.R 的转置，即 C2W.R）
+    t: 你类里存的 T（对应 W2C 的平移）
+    返回：W2C 4x4（避免任何 linalg.inv）
+    """
+    device = R.device
+    if translate is None:
+        translate = torch.zeros(3, device=device)
+    else:
+        translate = translate.to(device)
 
+    # C2W：R_c2w = R, c = -R @ t
+    c = - R @ t  # 相机中心（世界系）
+
+    # 应用平移/缩放
+    c_new = (c + translate) * scale
+
+    # 回到 W2C：R_w2c = Rᵀ, t' = -Rᵀ @ c_new
+    R_w2c = R.T
+    t_new = - R_w2c @ c_new
+
+    W2C = torch.eye(4, device=device, dtype=R.dtype)
+    W2C[:3, :3] = R_w2c
+    W2C[:3, 3]  = t_new
+    return W2C
 def getProjectionMatrix(znear, zfar, fovX, fovY):
     tanHalfFovY = math.tan((fovY / 2))
     tanHalfFovX = math.tan((fovX / 2))

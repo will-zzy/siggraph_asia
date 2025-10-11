@@ -15,6 +15,17 @@ import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
+
+
+
+def chunked(f, x, chunks=2):
+    n = x.shape[0]
+    outs = []
+    for i in range(0, n, (n+chunks-1)//chunks):
+        outs.append(f(x[i:i+((n+chunks-1)//chunks)]))
+    return torch.cat(outs, dim=0)
+
+
 def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
     ## view frustum filtering for acceleration    
     if visible_mask is None:
@@ -33,36 +44,47 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     ob_view = ob_view / ob_dist
 
     ## view-adaptive feature
-    if pc.use_feat_bank:
-        cat_view = torch.cat([ob_view, ob_dist], dim=1)
+    # print(pc.use_feat_bank)
+    # if pc.use_feat_bank:
+    #     cat_view = torch.cat([ob_view, ob_dist], dim=1)
         
-        bank_weight = pc.get_featurebank_mlp(cat_view).unsqueeze(dim=1) # [n, 1, 3]
+    #     bank_weight = pc.get_featurebank_mlp(cat_view).unsqueeze(dim=1) # [n, 1, 3]
 
-        ## multi-resolution feat
-        feat = feat.unsqueeze(dim=-1)
-        feat = feat[:,::4, :1].repeat([1,4,1])*bank_weight[:,:,:1] + \
-            feat[:,::2, :1].repeat([1,2,1])*bank_weight[:,:,1:2] + \
-            feat[:,::1, :1]*bank_weight[:,:,2:]
-        feat = feat.squeeze(dim=-1) # [n, c] 这里scaffold-gs只用了rgb，我们希望包含dc和sh
+    #     ## multi-resolution feat
+    #     feat = feat.unsqueeze(dim=-1)
+    #     feat = feat[:,::4, :1].repeat([1,4,1])*bank_weight[:,:,:1] + \
+    #         feat[:,::2, :1].repeat([1,2,1])*bank_weight[:,:,1:2] + \
+    #         feat[:,::1, :1]*bank_weight[:,:,2:]
+    #     feat = feat.squeeze(dim=-1) # [n, c] 这里scaffold-gs只用了rgb，我们希望包含dc和sh
 
 
-    cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1) # [N, c+3+1]
-    cat_local_view_wodist = torch.cat([feat, ob_view], dim=1) # [N, c+3]
+    if pc.add_opacity_dist or pc.add_cov_dist or pc.add_color_dist: # anchor如果不变的话这两个变量可以缓存
+        cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1) # [N, c+3+1]
+    else:
+        
+        cat_local_view_wodist = torch.cat([feat, ob_view], dim=1) # [N, c+3]
+        
+        
     if pc.appearance_dim > 0:
-        camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
-        # camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * 10
-        appearance = pc.get_appearance(camera_indicies)
+        cam_idx = torch.full((feat.size(0),), viewpoint_camera.uid,
+                             dtype=torch.long, device=anchor.device)
+        appearance = pc.get_appearance(cam_idx)   
 
     # get offset's opacity
     if pc.add_opacity_dist:
+        # neural_opacity = chunked(pc.get_opacity_mlp, cat_local_view) # anchor较少时用chunk反而会下降
         neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
     else:
+        # neural_opacity = chunked(pc.get_opacity_mlp, cat_local_view_wodist)
         neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
 
     # opacity mask generation
     neural_opacity = neural_opacity.reshape([-1, 1])
+    neural_opacity_flat = neural_opacity.reshape(-1, 1)
     mask = (neural_opacity > 0.0)
-    mask = mask.view(-1)
+    # mask = mask.view(-1)
+    mask = (neural_opacity_flat > 0.0).squeeze(1)
+    idx  = mask.nonzero(as_tuple=False).squeeze(1)  
 
     # select opacity 
     opacity = neural_opacity[mask]
@@ -70,45 +92,206 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     # get offset's color
     if pc.appearance_dim > 0:
         if pc.add_color_dist:
+            # color = chunked(pc.get_color_mlp, torch.cat([cat_local_view, appearance], dim=1))
             color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
         else:
+            # color = chunked(pc.get_color_mlp, torch.cat([cat_local_view_wodist, appearance], dim=1))
             color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
     else:
         if pc.add_color_dist:
+            # color = chunked(pc.get_color_mlp, cat_local_view)
             color = pc.get_color_mlp(cat_local_view)
         else:
+            # color = chunked(pc.get_color_mlp, cat_local_view_wodist)
             color = pc.get_color_mlp(cat_local_view_wodist)
-    color = color.reshape([anchor.shape[0]*pc.n_offsets, 3])# [mask]
+    color = color.reshape([anchor.shape[0] * pc.n_offsets, 3])# [mask]
 
     # get offset's cov
     if pc.add_cov_dist:
+        # scale_rot = chunked(pc.get_cov_mlp, cat_local_view)
         scale_rot = pc.get_cov_mlp(cat_local_view)
     else:
+        # scale_rot = chunked(pc.get_cov_mlp, cat_local_view_wodist)
         scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
     scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
     
     # offsets
-    offsets = grid_offsets.view([-1, 3]) # [mask]
+    # offsets = grid_offsets.view([-1, 3]) # [mask]
+    # 6) offsets / anchors / scaling 的“按需展开 + gather”
+    N, k = grid_offsets.shape[:2]
+    # (a) offsets => [N*k, 3]
+    offsets_flat = grid_offsets.reshape(-1, 3)
+    anchor_rep = anchor.repeat_interleave(k, dim=0)  
+    scaling_rep = grid_scaling.repeat_interleave(k, dim=0) # [N*k, 6]
+    opacity = neural_opacity_flat[idx]                     # [M, 1]
+    color   = color.index_select(0, idx)                   # [M, 3]
+    sr_sel  = scale_rot.index_select(0, idx)               # [M, 7]
+    off_sel = offsets_flat.index_select(0, idx)            # [M, 3]
+    anc_sel = anchor_rep.index_select(0, idx)              # [M, 3]
+    scl_sel = scaling_rep.index_select(0, idx)    
     
-    # combine for parallel masking
-    concatenated = torch.cat([grid_scaling, anchor], dim=-1)
-    concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
-    concatenated_all = torch.cat([concatenated_repeated, color, scale_rot, offsets], dim=-1)
-    masked = concatenated_all[mask]
-    scaling_repeat, repeat_anchor, color, scale_rot, offsets = masked.split([6, 3, 3, 7, 3], dim=-1)
     
-    # post-process cov
-    scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3]) # * (1+torch.sigmoid(repeat_dist))
-    rot = pc.rotation_activation(scale_rot[:,3:7])
-    
-    # post-process offsets to get centers for gaussians
-    offsets = offsets * scaling_repeat[:,:3]
-    xyz = repeat_anchor + offsets
+    scaling = scl_sel[:, 3:] * torch.sigmoid(sr_sel[:, :3])    # [M, 3]
+    rot     = pc.rotation_activation(sr_sel[:, 3:7])           # [M, 4] or whatever
+    # offsets -> xyz
+    off_scaled = off_sel * scl_sel[:, :3]
+    xyz = anc_sel + off_scaled                                  # [M, 3]
 
     if is_training:
-        return xyz, color, opacity, scaling, rot, neural_opacity, mask
+        return xyz, color, opacity, scaling, rot, neural_opacity_flat, mask
     else:
         return xyz, color, opacity, scaling, rot
+    
+    
+    # combine for parallel masking
+    # concatenated = torch.cat([grid_scaling, anchor], dim=-1)
+    # concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
+    # concatenated_all = torch.cat([concatenated_repeated, color, scale_rot, offsets], dim=-1)
+    # masked = concatenated_all[mask]
+    # scaling_repeat, repeat_anchor, color, scale_rot, offsets = masked.split([6, 3, 3, 7, 3], dim=-1)
+    
+    # # post-process cov
+    # scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3]) # * (1+torch.sigmoid(repeat_dist))
+    # rot = pc.rotation_activation(scale_rot[:,3:7])
+    
+    # # post-process offsets to get centers for gaussians
+    # offsets = offsets * scaling_repeat[:,:3]
+    # xyz = repeat_anchor + offsets
+
+    # if is_training:
+    #     return xyz, color, opacity, scaling, rot, neural_opacity, mask
+    # else:
+    #     return xyz, color, opacity, scaling, rot
+
+# def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
+#     ## view frustum filtering for acceleration    
+#     if visible_mask is None:
+#         visible_mask = torch.ones(pc.get_anchor.shape[0], dtype=torch.bool, device = pc.get_anchor.device)
+    
+#     feat = pc._anchor_feat[visible_mask]
+#     anchor = pc.get_anchor[visible_mask]
+#     grid_offsets = pc._offset[visible_mask]
+#     grid_scaling = pc.get_scaling[visible_mask]
+
+#     ## get view properties for anchor
+#     ob_view = anchor - viewpoint_camera.camera_center
+#     # dist
+#     ob_dist = ob_view.norm(dim=1, keepdim=True)
+#     # view
+#     ob_view = ob_view / ob_dist
+
+#     ## view-adaptive feature
+#     # print(pc.use_feat_bank)
+#     # if pc.use_feat_bank:
+#     #     cat_view = torch.cat([ob_view, ob_dist], dim=1)
+        
+#     #     bank_weight = pc.get_featurebank_mlp(cat_view).unsqueeze(dim=1) # [n, 1, 3]
+
+#     #     ## multi-resolution feat
+#     #     feat = feat.unsqueeze(dim=-1)
+#     #     feat = feat[:,::4, :1].repeat([1,4,1])*bank_weight[:,:,:1] + \
+#     #         feat[:,::2, :1].repeat([1,2,1])*bank_weight[:,:,1:2] + \
+#     #         feat[:,::1, :1]*bank_weight[:,:,2:]
+#     #     feat = feat.squeeze(dim=-1) # [n, c] 这里scaffold-gs只用了rgb，我们希望包含dc和sh
+
+#     if pc.add_opacity_dist or pc.add_color_dist or pc.add_cov_dist:
+#         cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1) # [N, c+3+1]
+#     else:
+#         cat_local_view_wodist = torch.cat([feat, ob_view], dim=1) # [N, c+3]
+#     if pc.appearance_dim > 0:
+#         camera_indicies = torch.ones_like(cat_local_view_wodist[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
+#         # camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * 10
+#         appearance = pc.get_appearance(camera_indicies)
+    
+    
+#     if pc.add_opacity_dist or pc.add_color_dist or pc.add_cov_dist:
+#         cat_local_view = torch.cat([cat_local_view, appearance], dim=1) 
+#         out = pc.big_head(cat_local_view)
+#     else:
+#         cat_local_view_wodist = torch.cat([cat_local_view_wodist, appearance], dim=1) 
+#         out = pc.big_head(cat_local_view_wodist)
+    
+#     out = pc.get_big_head(cat_local_view_wodist)
+#     k = pc.n_offsets
+#     opacity_logits = out[:, :k]                 # [N, k]
+#     color_flat     = out[:, k:k+3*k]            # [N, 3k]
+#     cov_flat       = out[:, k+3*k:k+3*k+7*k]    # [N, 7k]
+
+#     # 直接 reshape 成 [N*k, :]
+#     color  = color_flat.reshape(-1, 3)             # [N*k, 3]
+#     scale_rot = cov_flat.reshape(-1, 7)            # [N*k, 7]
+
+#     # opacity/掩码
+#     neural_opacity = opacity_logits.reshape(-1, 1)  # [N*k, 1]
+#     mask = neural_opacity.squeeze(1) > 0
+#     opacity = neural_opacity[mask]
+    
+    
+    
+    
+    
+    
+#     # if pc.appearance_dim > 0:
+#     #     camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
+#     #     # camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * 10
+#     #     appearance = pc.get_appearance(camera_indicies)
+
+#     # # get offset's opacity
+#     # if pc.add_opacity_dist:
+#     #     neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
+#     # else:
+#     #     neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
+
+#     # # opacity mask generation
+#     # neural_opacity = neural_opacity.reshape([-1, 1])
+#     # mask = (neural_opacity > 0.0)
+#     # mask = mask.view(-1)
+
+#     # # select opacity 
+#     # opacity = neural_opacity[mask]
+
+#     # # get offset's color
+#     # if pc.appearance_dim > 0:
+#     #     if pc.add_color_dist:
+#     #         color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
+#     #     else:
+#     #         color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
+#     # else:
+#     #     if pc.add_color_dist:
+#     #         color = pc.get_color_mlp(cat_local_view)
+#     #     else:
+#     #         color = pc.get_color_mlp(cat_local_view_wodist)
+#     # color = color.reshape([anchor.shape[0] * pc.n_offsets, 3])# [mask]
+
+#     # # get offset's cov
+#     # if pc.add_cov_dist:
+#     #     scale_rot = pc.get_cov_mlp(cat_local_view)
+#     # else:
+#     #     scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
+#     # scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
+    
+#     # offsets
+#     offsets = grid_offsets.view([-1, 3]) # [mask]
+    
+#     # combine for parallel masking
+#     concatenated = torch.cat([grid_scaling, anchor], dim=-1)
+#     concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
+#     concatenated_all = torch.cat([concatenated_repeated, color, scale_rot, offsets], dim=-1)
+#     masked = concatenated_all[mask]
+#     scaling_repeat, repeat_anchor, color, scale_rot, offsets = masked.split([6, 3, 3, 7, 3], dim=-1)
+    
+#     # post-process cov
+#     scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3]) # * (1+torch.sigmoid(repeat_dist))
+#     rot = pc.rotation_activation(scale_rot[:,3:7])
+    
+#     # post-process offsets to get centers for gaussians
+#     offsets = offsets * scaling_repeat[:,:3]
+#     xyz = repeat_anchor + offsets
+
+#     if is_training:
+#         return xyz, color, opacity, scaling, rot, neural_opacity, mask
+#     else:
+#         return xyz, color, opacity, scaling, rot
 
 def render(viewpoint_camera, 
            pc : GaussianModel, 
@@ -125,6 +308,7 @@ def render(viewpoint_camera,
     
     Background tensor (bg_color) must be on GPU!
     """
+    # is_training = pc.get_big_head.training
     is_training = pc.get_color_mlp.training
         
     if is_training:
@@ -283,9 +467,9 @@ def prefilter_voxel(viewpoint_camera,
         tanfovy=tanfovy,
         bg=bg_color,
         scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
-        projmatrix_raw=viewpoint_camera.projection_matrix,
+        viewmatrix = viewpoint_camera.world_view_transform,
+        projmatrix = viewpoint_camera.full_proj_transform,
+        projmatrix_raw = viewpoint_camera.projection_matrix,
         sh_degree=1,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,

@@ -143,7 +143,12 @@ class GaussianModel:
             nn.Linear(feat_dim, 3*self.n_offsets),
             nn.Sigmoid()
         ).cuda()
-        
+        # self.big_head = nn.Sequential(
+        #     nn.Linear(feat_dim+3 + self.color_dist_dim + self.appearance_dim + self.opacity_dist_dim + self.cov_dist_dim, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, 3*self.n_offsets + 7*self.n_offsets + n_offsets),
+        #     nn.Sigmoid()
+        # ).cuda()
         # self.sh_dist_dim = 1 if self.add_sh_dist else 0
         # self.mlp_sh = nn.Sequential(
         #     nn.Linear(feat_dim+3+self.sh_dist_dim+self.appearance_dim, feat_dim),
@@ -259,6 +264,9 @@ class GaussianModel:
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
     
+    # @property
+    # def get_big_head(self):
+    #     return self.big_head
     
     # @property
     # def get_xyz(self):
@@ -445,6 +453,7 @@ class GaussianModel:
                 {'params': self.mlp_opacity.parameters(), 'lr': training_args.mlp_opacity_lr_init, "name": "mlp_opacity"},
                 {'params': self.mlp_cov.parameters(), 'lr': training_args.mlp_cov_lr_init, "name": "mlp_cov"},
                 {'params': self.mlp_color.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_color"},
+                # {'params': self.big_head.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "big_head"},
                 {'params': self.embedding_appearance.parameters(), 'lr': training_args.appearance_lr_init, "name": "embedding_appearance"},
             ]
         else:
@@ -703,6 +712,7 @@ class GaussianModel:
             if  'mlp' in group['name'] or \
                 'conv' in group['name'] or \
                 'feat_base' in group['name'] or \
+                'big_head' in group['name'] or \
                 'embedding' in group['name']:
                 continue
             assert len(group["params"]) == 1
@@ -753,6 +763,7 @@ class GaussianModel:
             if  'mlp' in group['name'] or \
                 'conv' in group['name'] or \
                 'feat_base' in group['name'] or \
+                'big_head' in group['name'] or \
                 'embedding' in group['name']:
                 continue
 

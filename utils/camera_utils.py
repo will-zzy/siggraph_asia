@@ -174,4 +174,7 @@ def update_pose(camera, converged_threshold=1e-4):
     camera.update_RT(new_R.T, new_T) # 记得转回去
     camera.cam_rot_delta.data.fill_(0)
     camera.cam_trans_delta.data.fill_(0)
+    camera.update_W2C = False
+    camera.update_W2I = False
+    camera.update_center = False
     return converged

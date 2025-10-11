@@ -104,26 +104,34 @@ class GaussianModel:
             ).cuda()
 
         self.opacity_dist_dim = 1 if self.add_opacity_dist else 0
-        self.mlp_opacity = nn.Sequential(
-            nn.Linear(feat_dim+3+self.opacity_dist_dim, feat_dim),
-            nn.ReLU(True),
-            nn.Linear(feat_dim, n_offsets),
-            nn.Tanh()
-        ).cuda()
+        # self.mlp_opacity = nn.Sequential(
+        #     nn.Linear(feat_dim+3+self.opacity_dist_dim, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, n_offsets),
+        #     nn.Tanh()
+        # ).cuda()
 
         self.add_cov_dist = add_cov_dist
         self.cov_dist_dim = 1 if self.add_cov_dist else 0
-        self.mlp_cov = nn.Sequential(
-            nn.Linear(feat_dim+3+self.cov_dist_dim, feat_dim),
-            nn.ReLU(True),
-            nn.Linear(feat_dim, 7*self.n_offsets),
-        ).cuda()
+        # self.mlp_cov = nn.Sequential(
+        #     nn.Linear(feat_dim+3+self.cov_dist_dim, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, 7*self.n_offsets),
+        # ).cuda()
 
         self.color_dist_dim = 1 if self.add_color_dist else 0
-        self.mlp_color = nn.Sequential(
-            nn.Linear(feat_dim+3+self.color_dist_dim+self.appearance_dim, feat_dim),
+        # self.mlp_color = nn.Sequential(
+        #     nn.Linear(feat_dim+3+self.color_dist_dim+self.appearance_dim, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, 3*self.n_offsets),
+        #     nn.Sigmoid()
+        # ).cuda()
+        
+        
+        self.big_head = nn.Sequential(
+            nn.Linear(feat_dim+3 + self.color_dist_dim + self.appearance_dim + self.opacity_dist_dim + self.cov_dist_dim, feat_dim),
             nn.ReLU(True),
-            nn.Linear(feat_dim, 3*self.n_offsets),
+            nn.Linear(feat_dim, 3*self.n_offsets + 7*self.n_offsets + n_offsets),
             nn.Sigmoid()
         ).cuda()
 
@@ -218,6 +226,10 @@ class GaussianModel:
         del self._anchor
         torch.cuda.empty_cache()
         self._anchor = new_anchor
+        
+    @property
+    def get_big_head(self):
+        return self.big_head
     
     @property
     def get_opacity(self):
@@ -307,9 +319,10 @@ class GaussianModel:
                 {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
                 {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
 
-                {'params': self.mlp_opacity.parameters(), 'lr': training_args.mlp_opacity_lr_init, "name": "mlp_opacity"},
-                {'params': self.mlp_cov.parameters(), 'lr': training_args.mlp_cov_lr_init, "name": "mlp_cov"},
-                {'params': self.mlp_color.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_color"},
+                # {'params': self.mlp_opacity.parameters(), 'lr': training_args.mlp_opacity_lr_init, "name": "mlp_opacity"},
+                # {'params': self.mlp_cov.parameters(), 'lr': training_args.mlp_cov_lr_init, "name": "mlp_cov"},
+                # {'params': self.mlp_color.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_color"},
+                {'params': self.big_head.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "big_head"},
                 {'params': self.embedding_appearance.parameters(), 'lr': training_args.appearance_lr_init, "name": "embedding_appearance"},
             ]
         else:

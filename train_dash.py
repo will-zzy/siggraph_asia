@@ -241,7 +241,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-            if iteration > 2000 and iteration % 100 == 0:
+            if iteration > 1000 and iteration % 400 == 0:
                 # update_pose(viewpoint_cam)
                 for view in scene.getTrainCameras():
                     update_pose(view)

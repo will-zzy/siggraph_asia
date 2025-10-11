@@ -31,7 +31,12 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
-        
+        self.update_W2C = False
+        self.update_W2I = False
+        self.update_center = False
+        self.W2C = None
+        self.W2I = None
+        self.center = None
         
         
         try:
@@ -113,18 +118,31 @@ class Camera(nn.Module):
         
     @property
     def world_view_transform(self):
-        return getWorld2View2(self.R, self.T).transpose(0, 1)
+        if self.update_W2C:
+            return self.W2C
+        else:
+            self.W2C = getWorld2View2(self.R, self.T).transpose(0, 1)
+            self.update_W2C = True
+            return self.W2C
     
     @property
     def full_proj_transform(self):
-        return (
-            self.world_view_transform.unsqueeze(0).bmm(
-                self.projection_matrix.unsqueeze(0)
-            )
-        ).squeeze(0)
+        if self.update_W2I:
+            return self.W2I
+        else:
+            self.W2I = (self.world_view_transform.unsqueeze(0).bmm(
+                self.projection_matrix.unsqueeze(0))).squeeze(0)
+            self.update_W2I = True
+            return self.W2I
+        
     @property
     def camera_center(self):
-        return self.world_view_transform.inverse()[3, :3]
+        if self.update_center:
+            return self.center
+        else:
+            self.center = self.world_view_transform.inverse()[3, :3]
+            self.update_center = True
+            return self.center
         
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
