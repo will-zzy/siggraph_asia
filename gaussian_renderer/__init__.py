@@ -73,10 +73,10 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     # get offset's opacity
     if pc.add_opacity_dist:
         # neural_opacity = chunked(pc.get_opacity_mlp, cat_local_view) # anchor较少时用chunk反而会下降
-        neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
+        neural_opacity = pc.get_opacity_mlp(cat_local_view).float() # [N, k]
     else:
         # neural_opacity = chunked(pc.get_opacity_mlp, cat_local_view_wodist)
-        neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
+        neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist).float()
 
     # opacity mask generation
     neural_opacity = neural_opacity.reshape([-1, 1])
@@ -93,26 +93,26 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     if pc.appearance_dim > 0:
         if pc.add_color_dist:
             # color = chunked(pc.get_color_mlp, torch.cat([cat_local_view, appearance], dim=1))
-            color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
+            color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1)).float()
         else:
             # color = chunked(pc.get_color_mlp, torch.cat([cat_local_view_wodist, appearance], dim=1))
-            color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
+            color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1)).float()
     else:
         if pc.add_color_dist:
             # color = chunked(pc.get_color_mlp, cat_local_view)
-            color = pc.get_color_mlp(cat_local_view)
+            color = pc.get_color_mlp(cat_local_view).float()
         else:
             # color = chunked(pc.get_color_mlp, cat_local_view_wodist)
-            color = pc.get_color_mlp(cat_local_view_wodist)
+            color = pc.get_color_mlp(cat_local_view_wodist).float()
     color = color.reshape([anchor.shape[0] * pc.n_offsets, 3])# [mask]
 
     # get offset's cov
     if pc.add_cov_dist:
         # scale_rot = chunked(pc.get_cov_mlp, cat_local_view)
-        scale_rot = pc.get_cov_mlp(cat_local_view)
+        scale_rot = pc.get_cov_mlp(cat_local_view).float()
     else:
         # scale_rot = chunked(pc.get_cov_mlp, cat_local_view_wodist)
-        scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
+        scale_rot = pc.get_cov_mlp(cat_local_view_wodist).float()
     scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
     
     # offsets
