@@ -42,4 +42,5 @@ b.You must provide the reconstructed SfM point cloud and corresponding camera po
 
 复赛可能需要加的：<br>
 (1)radsplat的pruing策略<br>
-(2)根据render图像和gt图的差异，差异大的地方通过渲染深度反投影三维点作为新添加的高斯点
+(2)根据render图像和gt图的差异，差异大的地方通过渲染深度反投影三维点作为新添加的高斯点<br>
+(3)使用`topK densify` + splat数量schedule控制anchor数目增长
