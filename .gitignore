@@ -8,5 +8,5 @@ tensorboard_3d
 screenshots
 __pycache__
 data
-metric3D
 tiny-cuda-nn
+weight

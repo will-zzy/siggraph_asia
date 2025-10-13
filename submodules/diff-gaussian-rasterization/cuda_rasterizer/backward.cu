@@ -480,6 +480,8 @@ __global__ void preprocessCUDA(
 	const float *proj_raw,
 	const glm::vec3* campos,
 	const float3* dL_dmean2D,
+	float3* dL_dmean2D_abs,
+	const float* depths,
 	glm::vec3* dL_dmeans,
 	float* dL_dcolor,
 	// float *dL_ddepth, // maybe add the gradient from depth
@@ -494,7 +496,8 @@ __global__ void preprocessCUDA(
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
 		return;
-
+	// dL_dmean2D_abs[idx].x *= depths[idx];
+	// dL_dmean2D_abs[idx].y *= depths[idx];
 	float3 m = means[idx];
 
 	// Taking care of gradients from the screenspace points
@@ -637,6 +640,7 @@ PerGaussianRenderCUDA(
 	const float* __restrict__ dL_dpixels,
 	const float* __restrict__ dL_invdepths,
 	float3* __restrict__ dL_dmean2D,
+	float3* __restrict__ dL_dmean2D_abs,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
@@ -690,6 +694,8 @@ PerGaussianRenderCUDA(
 	// Gradient accumulation variables
 	float Register_dL_dmean2D_x = 0.0f;
 	float Register_dL_dmean2D_y = 0.0f;
+	float Register_dL_dmean2D_x_abs = 0.0f;
+	float Register_dL_dmean2D_y_abs = 0.0f;
 	float Register_dL_dconic2D_x = 0.0f;
 	float Register_dL_dconic2D_y = 0.0f;
 	float Register_dL_dconic2D_w = 0.0f;
@@ -798,8 +804,10 @@ PerGaussianRenderCUDA(
 			// accumulate the gradients
 			const float tmp_x = dL_dG * dG_ddelx * ddelx_dx;
 			Register_dL_dmean2D_x += tmp_x;
+			Register_dL_dmean2D_x_abs += fabs(tmp_x);
 			const float tmp_y = dL_dG * dG_ddely * ddely_dy;
 			Register_dL_dmean2D_y += tmp_y;
+			Register_dL_dmean2D_y_abs += fabs(tmp_y);
 
 			Register_dL_dconic2D_x += -0.5f * gdx * d.x * dL_dG;
 			Register_dL_dconic2D_y += -0.5f * gdx * d.y * dL_dG;
@@ -812,6 +820,8 @@ PerGaussianRenderCUDA(
 	if (valid_splat) {
 		atomicAdd(&dL_dmean2D[gaussian_idx].x, Register_dL_dmean2D_x);
 		atomicAdd(&dL_dmean2D[gaussian_idx].y, Register_dL_dmean2D_y);
+		atomicAdd(&dL_dmean2D_abs[gaussian_idx].x, Register_dL_dmean2D_x_abs);
+		atomicAdd(&dL_dmean2D_abs[gaussian_idx].y, Register_dL_dmean2D_y_abs);
 		atomicAdd(&dL_dconic2D[gaussian_idx].x, Register_dL_dconic2D_x);
 		atomicAdd(&dL_dconic2D[gaussian_idx].y, Register_dL_dconic2D_y);
 		atomicAdd(&dL_dconic2D[gaussian_idx].w, Register_dL_dconic2D_w);
@@ -842,6 +852,8 @@ void BACKWARD::preprocess(
 	const float tan_fovx, float tan_fovy,
 	const glm::vec3* campos,
 	const float3* dL_dmean2D,
+	float3* dL_dmean2D_abs, // need to be amplify when far away from camera
+	const float* depths,
 	const float* dL_dconic,
 	const float* dL_dinvdepth,
 	float* dL_dopacity,
@@ -896,6 +908,8 @@ void BACKWARD::preprocess(
 		projmatrix_raw,
 		campos,
 		(float3*)dL_dmean2D,
+		(float3*)dL_dmean2D_abs,
+		depths,
 		(glm::vec3*)dL_dmean3D,
 		dL_dcolor,
 		dL_dcov3D,
@@ -928,6 +942,7 @@ void BACKWARD::render(
 	const float* dL_dpixels,
 	const float* dL_invdepths,
 	float3* dL_dmean2D,
+	float3* dL_dmean2D_abs,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
 	float* dL_dcolors,
@@ -954,6 +969,7 @@ void BACKWARD::render(
 		dL_dpixels,
 		dL_invdepths,
 		dL_dmean2D,
+		dL_dmean2D_abs, 
 		dL_dconic2D,
 		dL_dopacity,
 		dL_dcolors, 

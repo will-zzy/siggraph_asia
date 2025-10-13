@@ -52,7 +52,9 @@ namespace CudaRasterizer
 			const bool prefiltered,
 			float* out_color,
 			float* depth,
+			float* per_gaussian_contrib, 
 			bool antialiasing,
+			bool pruning,
 			int* radii = nullptr,
 			bool debug = false);
 
@@ -82,6 +84,7 @@ namespace CudaRasterizer
 			const float* dL_dpix,
 			const float* dL_invdepths,
 			float* dL_dmean2D,
+			float* dL_dmean2D_abs,
 			float* dL_dconic,
 			float* dL_dopacity,
 			float* dL_dcolor,

@@ -199,7 +199,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 # gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
                 if iteration > opt.update_from and iteration % opt.update_interval == 0:
-                    gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
+                    gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity, scheduler=scheduler)
                 # if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                 #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                 #     # Apply DashGaussian primitive scheduler to control densification.
@@ -241,7 +241,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-            if iteration > 1000 and iteration % 400 == 0:
+            if iteration > 1000 and iteration % 400 == 0 and iteration < opt.update_until :
                 # update_pose(viewpoint_cam)
                 for view in scene.getTrainCameras():
                     update_pose(view)
