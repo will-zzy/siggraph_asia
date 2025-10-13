@@ -1,5 +1,5 @@
 *.pyc
-.vscode
+# .vscode
 output
 build
 diff_rasterization/diff_rast.egg-info
@@ -9,4 +9,5 @@ screenshots
 __pycache__
 data
 tiny-cuda-nn
-weight
+# weight
+metric_depth_vit_giant2_800k.pth

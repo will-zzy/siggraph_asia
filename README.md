@@ -1,75 +1,45 @@
-# DashGaussian: Optimizing 3D Gaussian Splatting in 200 Seconds
-### [Webpage](https://dashgaussian.github.io/) | [Paper](https://arxiv.org/pdf/2503.18402) | [arXiv](https://arxiv.org/abs/2503.18402) | [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC_BY--NC--SA_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+本版主要包含了
+> 1.speedy-splat的前向（更紧凑的bbox）
 
-The implementation of **DashGaussian: Optimizing 3D Gaussian Splatting in 200 Seconds**, a powerful 3DGS training acceleration method. Accepted by CVPR 2025 (highlight).
+> 2.taming-gs的反向（renderCUDA中per-gaussian的并行）
 
-In this repository, we show how to plug DashGaussian into [the up-to-date 3DGS implementation](https://github.com/graphdeco-inria/gaussian-splatting). 
+> 3.scaffold-GS表达（加速收敛）
 
-## Update History
-* 2025.08.16 : A bug in reproduction is fixed. Now DashGaussian works correctly to boost the optimization speed of 3DGS while improving the rendering quality. 
+> 4.位姿优化（monoGS优化策略）
 
-## Environment Setup
-To prepare the environment, 
+> 5.metric3D用于添加初始高斯点云，metric3D需要另外下[权重](https://huggingface.co/JUGGHM/Metric3D/resolve/main/metric_depth_vit_giant2_800k.pth?download=true)到`metric3D/weight`目录下
 
-1. Clone this repository. 
-	```
-	git clone https://github.com/YouyuChen0207/DashGaussian.git
-	```
-2. Follow [3DGS](https://github.com/graphdeco-inria/gaussian-splatting) to install dependencies. 
+比赛要求30s~60s内重建完整个场景，评测时使用全分辨率，在4090上测。初赛ddl是**October 25, 2025**，复赛ddl是**November 15, 2025**。给定的数据包含colmap格式的sfm结果和视频以及时间戳与colmap-image_id的对应关系
 
-	Please notice, that the ```diff-gaussian-rasterization``` module contained in this repository has already been switched to the ```3dgs-accel``` branch for efficient backward computation.
-
-## Run DashGaussian
-
-### Running Comand
-Set the data paths in ```scripts/full_eval.sh``` to your local data folder, and run.
+使用单目深度模型预先预测深度包含在预处理时间内，并不属于重建时间。但如果要重跑colmap，colmap的特征提取、匹配、ba都属于重建时间。官方具体回复意见如下：
 ```
-bash scripts/full_eval.sh
+1.Currently, we do not have an official consultation group for the challenge. All official announcements and updates will be communicated through our website. Please check it regularly for the latest information.
+
+2.Participants are required to submit their complete source code. This should be accompanied by a Conda environment file (environment.yml) and a clear setup documentation file (e.g., README.md) explaining how to configure the environment and run the code. All evaluations will be conducted on our standard testing platform: a single NVIDIA GeForce RTX 4090 Ti GPU with Ubuntu 22.04. The evaluation will be conducted using the original full resolution of the provided images.
+3.The 60-second time limit specifically refers to the reconstruction part only - that is, the computation time from the input set of images to the final .ply output. This timing does not include data loading and image pre-processing, and saving the .ply output.
+4.Regarding camera pose refinement: You are permitted to re-run SfM or perform other pose optimization as part of your preprocessing. However, please note that:
+a.The computational time required for this process will be included in the 60-second reconstruction time limit
+b.You must provide the reconstructed SfM point cloud and corresponding camera pose files with your submission
 ```
 
-### Running Options
-In ```full_eval.py```, you can set, 
-* ```--dash``` Enable DashGaussian.
-* ```--fast``` Use the Sparse Adam optimizer. 
-* ```--preset_upperbound``` Set the primitive number upperbound manually for DashGaussian and disable the momentum-based primitive upperbound budgeting method. This option is disabled by default.
 
-### Plug DashGaussian into Other 3DGS Backbones
-This repository is an example to plug DashGaussian into 3DGS backbones. 
-Search keyword ```DashGaussian``` within the project, you can find all code pieces integrating DashGaussian into the backbone. 
+各路环境都在environment.yaml中，包括需要本地安装的cuda kernel。运行脚本可以使用`.vscode/run.sh`，需要更换数据集路径。数据集在[此处下载](https://cuhko365-my.sharepoint.com/personal/218012028_link_cuhk_edu_cn/_layouts/15/onedrive.aspx?id=%2Fpersonal%2F218012028%5Flink%5Fcuhk%5Fedu%5Fcn%2FDocuments%2FGAP%2FFinal%2Erar&parent=%2Fpersonal%2F218012028%5Flink%5Fcuhk%5Fedu%5Fcn%2FDocuments%2FGAP&ga=1)，但是我下下来.rar只能解压部分，在不同设备上都是如此。
 
-## Results
-The following experiment results are produced with a personal NVIDIA RTX 4090 GPU.
-The average of rendering quality metrics, number of Gaussian primitives in the optimized 3DGS model, and training time, are reported. 
-### [Mipnerf-360 Dataset](https://jonbarron.info/mipnerf360/)
-|  Method | Optimizer | PSNR | SSIM | LPIPS | N_GS | Time (min) |
-|-----|-----|-----|-----|-----|-----|-----|
-| 3DGS | Adam | 27.51 | 0.8159 | 0.2149 | 2.73M | 12.70 |
-| 3DGS-Dash | Adam | 27.70 | 0.8201 | 0.2140 | 2.42M | 6.21 | 
-| 3DGS-fast | Sparse Adam | 27.33 | 0.8102 | 0.2240 | 2.46M | 7.91 | 
-| 3DGS-fast-Dash | Sparse Adam | 27.66 | 0.8167 | 0.2202 | 2.23M | 3.69 |
 
-### [Deep-Blending Dataset](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip)
-|  Method | Optimizer | PSNR | SSIM | LPIPS | N_GS | Time (min) |
-|-----|-----|-----|-----|-----|-----|-----|
-| 3DGS | Adam | 29.83 | 0.9069 | 0.2377 | 2.48M | 10.74 |
-| 3DGS-Dash | Adam | 29.87 | 0.9061 | 0.2458 | 1.94M | 3.78 | 
-| 3DGS-fast | Sparse Adam | 29.48 | 0.9068 | 0.2461 | 2.31M | 6.71 | 
-| 3DGS-fast-Dash | Sparse Adam | 30.14 | 0.9085 | 0.2477 | 1.94M | 2.31 |
+目前重建流程在4090上重建结果限制在8000iter以内的话可以做到1min重建，psnr测了几个场景大概能到20（室外低很多，16,13都有可能），但其实看样子是重建的差不多了的，比如左不使用scaffold，右使用scaffold（两者高斯点云都是10w，psnr只差了0.3）
 
-### [Tanks&Temple Dataset](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip)
-|  Method | Optimizer | PSNR | SSIM | LPIPS | N_GS | Time (min) |
-|-----|-----|-----|-----|-----|-----|-----|
-| 3DGS | Adam | 23.73 | 0.8526 | 0.1694 | 1.57M | 8.04 |
-| 3DGS-Dash | Adam | 24.01 | 0.8514 | 0.1789 | 1.20M | 3.88 | 
-| 3DGS-fast | Sparse Adam | 23.78 | 0.8502 | 0.1741 | 1.53M | 6.11 | 
-| 3DGS-fast-Dash | Sparse Adam | 24.02 | 0.8519 | 0.1798 | 1.20M | 2.83 |
 
-## Citation
-```
-@inproceedings{chen2025dashgaussian,
-  title     = {DashGaussian: Optimizing 3D Gaussian Splatting in 200 Seconds},
-  author    = {Chen, Youyu and Jiang, Junjun and Jiang, Kui and Tang, Xiao and Li, Zhihao and Liu, Xianming and Nie, Yinyu},
-  booktitle = {CVPR},
-  year      = {2025}
-}
-```
+<img src="assets/w/baseline_65854755746000.jpg_iter008000.png" alt="Image 1" width="250"> <img src="assets/w/scaffold_65854755746000.jpg_iter008000.png" alt="Image 2" width="250">
+
+
+
+感觉初赛用这个应该能拱进复赛，现阶段还差流程标准化：<br>
+>1.full evaluate的评测脚本；<br>
+2.由于比赛要求提供30s重建时的指标，因此需要在训练中加一个计时器，当训练到达30s时停止迭代且停止计时，eval一下输出结果再继续训练继续计时。<br>
+3.重建到达60s时强制停止，并保存`.ply`+eval<br>
+4.4页技术报告
+
+
+复赛可能需要加的：<br>
+(1)radsplat的pruing策略<br>
+(2)根据render图像和gt图的差异，差异大的地方通过渲染深度反投影三维点作为新添加的高斯点
