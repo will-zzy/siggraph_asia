@@ -386,7 +386,9 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	const bool prefiltered,
 	float* out_color,
 	float* invdepth,
+	float* per_gaussian_contrib, 
 	bool antialiasing,
+	const bool pruning,
 	int* radii,
 	bool debug)
 {

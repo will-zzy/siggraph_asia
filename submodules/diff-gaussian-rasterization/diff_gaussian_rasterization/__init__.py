@@ -89,6 +89,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.antialiasing,
+            False,
             raster_settings.debug
         )
 
