@@ -88,6 +88,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+    
+    # 添加时间计数器，在iteration开始后开始计时
+    start_time = time.time()
+    eval_time = None
+    time_save_iterations = [30, 60]  # 30秒和60秒时保存
+    
     for iteration in range(first_iter, opt.iterations + 1):
         # if network_gui.conn == None:
         #     network_gui.try_connect()
@@ -181,11 +187,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
+            ########## TODO 是否要删除test视角渲染？
             iter_time = iter_start.elapsed_time(iter_end)
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
+            ##########
+                
+            #  检查时间计数器，30秒和60秒时保存结果
+            elapsed_time = time.time() - start_time
+            if elapsed_time >= 30 and 30 in time_save_iterations:
+                eval_start_time = time.time()
+                print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
+                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30)
+                eval_time = time.time() - eval_start_time
+                time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
+            elif eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations:
+                print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
+                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60)
+                scene.save(iteration)
+                time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
+                # 到60秒后退出训练
+                sys.exit(0)
 
             # optim_start.record()
 
@@ -320,6 +344,43 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
             tb_writer.add_scalar('total_points', scene.gaussians.get_anchor.shape[0], iteration)
         torch.cuda.empty_cache()
+        
+def eval(scene : Scene, renderFunc, renderArgs, iteration: int, time: int):
+    torch.cuda.empty_cache()
+    config = {'name': 'test', 'cameras' : scene.getTestCameras()}
+    (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
+    if config['cameras'] and len(config['cameras']) > 0:
+        l1_test = 0.0
+        psnr_test = 0.0
+        lpips_test = 0.0
+        ssim_test = 0.0
+        for idx, viewpoint in enumerate(config['cameras']):
+            voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
+            image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+            
+            # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+            # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+            gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+            if train_test_exp:
+                image = image[..., image.shape[-1] // 2:]
+                gt_image = gt_image[..., gt_image.shape[-1] // 2:]
+            l1_test += l1_loss(image, gt_image).mean().double()
+            psnr_test += psnr(image, gt_image).mean().double()
+            lpips_test += lpips_fn(image, gt_image).mean().double()
+            ssim_test += ssim(image, gt_image).mean().double()
+            image_write = image.permute(1,2,0).detach().cpu().numpy()
+            image_write = (image_write * 255).astype("uint8")
+            os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+            cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_{}_iter{:06d}.png".format(config['name'], viewpoint.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+        
+        psnr_test /= len(config['cameras'])
+        l1_test /= len(config['cameras'])
+        lpips_test /= len(config['cameras'])
+        ssim_test /= len(config['cameras'])
+        print("\n[ITER {}] Evaluating {}sec: L1 {} PSNR {} LPIPS {} SSIM {}".format(iteration, time, l1_test, psnr_test, lpips_test, ssim_test))
+            
+    torch.cuda.empty_cache()
+    
 
 if __name__ == "__main__":
     # Set up command line argument parser
