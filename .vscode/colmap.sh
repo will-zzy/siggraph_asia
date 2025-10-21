@@ -92,7 +92,7 @@ addGaussianInitPoints(){
 }
 
 case=$1
-root_dir=~/data/sa/$case
+root_dir=~/data/Final/$case
 
 preprocess $root_dir $case
 # sparse_reconstruction $root_dir images

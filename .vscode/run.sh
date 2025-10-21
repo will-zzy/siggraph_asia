@@ -1,6 +1,6 @@
 
 case=1748153841908
-root_dir=/home/zzy/data/sa/$case
+root_dir=/home/will/data/Final/$case
 # name=sig_GS_R2_speedy_forward
 name=sig_GS_R2_speedy_forward_LB_w_scaffold_withPoseOptimization_24000AddInit
 # name=sig_GS_R2_baseline
