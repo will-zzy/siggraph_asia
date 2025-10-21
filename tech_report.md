@@ -1,25 +1,3 @@
-# 3DV-CASIA队伍-技术方案
-
-## 0.数据集分析与方法概述
-
-本次比赛数据集包含30个场景，包含以下特点：
-
-> 1.SLAM结果较差：稀疏点云少，位姿不准；
->
-> 2.虽然拍摄了30s~60s，但图像覆盖区域不大，且包含face forward和object centric拍摄
->
-> 3.
-
-
-
-
-
-经分析，我们对**Rasterization**中的`Forward->PreprocessCUDA`，`Barckward->RenderCUDA`进行了优化，并改进了三维表示使其更快收敛，同时应用了单目深度估计用于增添稠密点与监督训练，最后我们在训练过程中对位姿进行优化。
-
-接下来我们详细介绍我们的上述模块
-
-
-
 
 
 ## 1.Methods
@@ -28,7 +6,7 @@
 
 在原版3DGS的方法中，我们借鉴了speedy-splat的解析前向法：
 
-<img src="assets\w\image-20251021113719161.png" alt="image-20251021113719161" style="zoom:67%;" />
+<img src="assets/w/image-20251021113719161.png" alt="image-20251021113719161" style="zoom:67%;" />
 
 给定2D椭圆参数$Cov2D=\{a,b,c\}$，以及椭圆的质心$\mu$和椭球的不透明度$o$，椭圆参数化方程可描述为
 $$
@@ -38,27 +16,42 @@ $$
 $$
 y_{min/max}=\frac{-bx_d\pm\sqrt{(b^2-ac)x_d^2+tc}}{c},\;\;\;x_d=\pm\sqrt{\frac{b^2t}{(b^2-ac)a}}
 $$
+随后，在`SnugBox`所占据的`rectangle tiles`中，我们遍历列`tiles`，并根据列`tile`的左右边界坐标（e.g. $x=x_{tmin},\;\;x=x_{tmax}$）闭式计算出与椭圆的交点，从而确定该列有哪些`tile`与椭圆相交，并顺序写入`tile id`和`depth value`。
 
 
 
 
-同时我们也在TNT数据集上对比了在`duplicateWithKeys`过程中使用`LOAD BALANCING`的
+
+### 1.2.Backward->Per-Gaussian parrarelization
+
+Taming-GS提出使用per-Gaussian而不是per-pixel的反向传播策略。具体来说，传统的3DGS在反向传播时每个线程负责一个像素，并顺序遍历叠在该像素上的所有高斯，并对梯度进行原子加法，这在不同线程中会引起严重的竞态。在一般场景中，一个tile上往往叠加了几百个splats，这也会使得并行数（256）小于顺序遍历数。而Taming-GS提出每个线程负责一个splat，计算完当前tile所有像素对于该splat的梯度贡献后再进行原子加法，大大减小了线程竞态；
+
+<img src="assets/w/image-20251021164509192.png" alt="image-20251021164509192" style="zoom:50%;" />		<img src="assets/w/image-20251021164524524.png" alt="image-20251021164524524" style="zoom:50%;" /> 
+
+我们在前向渲染时，**每个像素**每渲染32个splats记录一次反向传播时所需的透射率`T`和所blending的颜色`C`，从而在反向传播时，每个warp可以独立地对自己组内的splat递归更新梯度，如图3（右）所示，不同颜色表示不同的warp，每个warp根据前向时所记录的`T`和`C`在warp内遍历当前tile所有像素，递归更新每个splat的梯度
+
+<img src="assets/w/image-20251021165143361.png" alt="image-20251021165143361" style="zoom:50%;" />						<img src="assets/w/image-20251021165116057.png" alt="image-20251021165116057" style="zoom:50%;" />
 
 
 
-1.2.Backward->Per-Gaussian parrarelization
+将`Forward`与`Backward`结合，我们在TNT数据集上测试了训练时长（30000轮迭代），同时我们也比较了在`duplicateWithKeys`过程中使用`LOAD BALANCING`的时长：
 
-在Taming-GS中，
-
-
+| **TNT /s (4090)**                    | **Barn** | **Truck** | **Ignatius** | **Meeting** | **Caterp** |
+| :----------------------------------- | :------: | :-------: | :----------: | :---------: | :--------: |
+| 3DGS (baseline)                      |   638    |    611    |     618      |     574     |    615     |
+| w/ Backward                          |   191    |    173    |     181      |     145     |    183     |
+| w/ Backward & Forward                |   180    |  **159**  |   **173**    |   **137**   |  **171**   |
+| w/ Backward & Forward & Load Balance | **176**  |    163    |     177      |     141     |    171     |
 
 1.3.Representation->Neural Gaussians
 
-应用了1.1和1.2中的加速方法之后，在4090上仍然没法在1min中内完成收敛，因此我们打算使用锚点来加速收敛，由于每个锚点维护一个feature，
+应用了1.1和1.2中的加速方法之后，我们发现在4090上仍然没法在1min中内完成收敛，哪怕提前截止（20000轮），时间也在1min开外，因此我们打算更改表达方式进行加速。
+
+我们分析，由于在原本的表达中，每个splat为一个单独的叶子节点，这使得每个splat并不能共享优化信息，使得优化效率低下，
 
 
 
-
+<img src="assets/w/image-20251021171748579.png" alt="image-20251021171748579" style="zoom:50%;" />
 
 
 
@@ -66,7 +59,7 @@ $$
 
 1.4.Densification of Init points
 
-
+<img src="assets/w/image-20251021171804904.png" alt="image-20251021171804904" style="zoom:50%;" />
 
 
 
@@ -74,11 +67,9 @@ $$
 
 1.5.Pose Optimization
 
-
+<img src="assets/w/image-20251021171815382.png" alt="image-20251021171815382" style="zoom:50%;" />
 
 
 
 2.测试结果
-
-
 
