@@ -25,6 +25,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from utils.schedule_utils import TrainingScheduler
 import cv2
+import csv
 lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -46,7 +47,7 @@ except:
 
 UPLOAD_IMG = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, log_file=None):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
@@ -200,12 +201,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if elapsed_time >= 30 and 30 in time_save_iterations:
                 eval_start_time = time.time()
                 print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
-                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30)
+                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file)
                 eval_time = time.time() - eval_start_time
                 time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
             elif eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
-                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60)
+                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
@@ -345,7 +346,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_scalar('total_points', scene.gaussians.get_anchor.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(scene : Scene, renderFunc, renderArgs, iteration: int, time: int):
+def eval(scene : Scene, renderFunc, renderArgs, iteration: int, time: int, log_file=None):
     torch.cuda.empty_cache()
     config = {'name': 'test', 'cameras' : scene.getTestCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
@@ -378,6 +379,15 @@ def eval(scene : Scene, renderFunc, renderArgs, iteration: int, time: int):
         lpips_test /= len(config['cameras'])
         ssim_test /= len(config['cameras'])
         print("\n[ITER {}] Evaluating {}sec: L1 {} PSNR {} LPIPS {} SSIM {}".format(iteration, time, l1_test, psnr_test, lpips_test, ssim_test))
+        
+        # 记录到文件
+        if log_file is not None:
+            with open(log_file, 'a', newline='') as csvfile:
+                log_writer = csv.writer(csvfile)
+                if time == 30:
+                    log_writer.writerow([scene.model_path.split('/')[-3], 30, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
+                elif time == 60:
+                    log_writer.writerow([scene.model_path.split('/')[-3], 60, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
             
     torch.cuda.empty_cache()
     
@@ -392,13 +402,14 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000 * (i + 1) for i in range(30)])
-    # parser.add_argument("--test_iterations", nargs="+", type=int, default=[7000,30000])
+    # parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000 * (i + 1) for i in range(30)])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7000,30000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--log_file", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     
@@ -411,7 +422,7 @@ if __name__ == "__main__":
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.log_file)
 
     # All done
     print("\nTraining complete.")
