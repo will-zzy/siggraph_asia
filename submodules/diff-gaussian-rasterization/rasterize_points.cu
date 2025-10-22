@@ -365,3 +365,113 @@ RasterizeGaussiansfilterCUDA(
   }
   return radii;
 }
+
+
+
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+RasterizeGaussiansSimpCUDA(
+	const torch::Tensor& background,
+	const torch::Tensor& means3D,
+    const torch::Tensor& colors,
+    const torch::Tensor& opacity,
+	const torch::Tensor& scales,
+	const torch::Tensor& rotations,
+	const float scale_modifier,
+	const torch::Tensor& cov3D_precomp,
+	const torch::Tensor& viewmatrix,
+	const torch::Tensor& projmatrix,
+    const torch::Tensor& projmatrix_raw,
+	const float tan_fovx, 
+	const float tan_fovy,
+    const int image_height,
+    const int image_width,
+	const torch::Tensor& dc,
+	const torch::Tensor& sh,
+	const int degree,
+	const torch::Tensor& campos,
+	const bool prefiltered,
+	const bool antialiasing,
+	const bool pruning,
+	const bool debug)
+{
+  if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
+    AT_ERROR("means3D must have dimensions (num_points, 3)");
+  }
+  
+  const int P = means3D.size(0);
+  const int H = image_height;
+  const int W = image_width;
+
+  auto int_opts = means3D.options().dtype(torch::kInt32);
+  auto float_opts = means3D.options().dtype(torch::kFloat32);
+
+  torch::Tensor out_color = torch::full({NUM_CHANNELS_3DGS, H, W}, 0.0, float_opts);
+  torch::Tensor out_invdepth = torch::full({1, H, W}, 0.0, float_opts);
+  torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
+  torch::Tensor per_gaussian_contrib = torch::full({P}, 0.0, float_opts);
+  
+  torch::Device device(torch::kCUDA);
+  torch::TensorOptions options(torch::kByte);
+  torch::Tensor geomBuffer = torch::empty({0}, options.device(device));
+  torch::Tensor binningBuffer = torch::empty({0}, options.device(device));
+  torch::Tensor imgBuffer = torch::empty({0}, options.device(device));
+  torch::Tensor sampleBuffer = torch::empty({0}, options.device(device));
+  std::function<char*(size_t)> geomFunc = resizeFunctional(geomBuffer);
+  std::function<char*(size_t)> binningFunc = resizeFunctional(binningBuffer);
+  std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
+  std::function<char*(size_t)> sampleFunc = resizeFunctional(sampleBuffer);
+
+
+  
+  torch::Tensor accum_weights_ptr = torch::full({P}, 0, float_opts); // 每个高斯在所有像素上的权重累加器
+  torch::Tensor accum_weights_count = torch::full({P}, 0, int_opts); // 每个高斯参与渲染计数器
+  torch::Tensor accum_max_count = torch::full({P}, 0, float_opts); // 每个高斯贡献最大计数器
+  
+  int rendered = 0;
+  int num_buckets = 0;
+  if(P != 0)
+  {
+	  int M = 0;
+	  if(sh.size(0) != 0)
+	  {
+		M = sh.size(1);
+      }
+
+	  auto tup = CudaRasterizer::Rasterizer::forward_simp(
+	    geomFunc,
+		binningFunc,
+		imgFunc,
+		sampleFunc,
+	    P, degree, M,
+		background.contiguous().data<float>(),
+		W, H,
+		means3D.contiguous().data<float>(),
+		dc.contiguous().data_ptr<float>(),
+		sh.contiguous().data_ptr<float>(),
+		colors.contiguous().data<float>(), 
+		opacity.contiguous().data<float>(), 
+		scales.contiguous().data_ptr<float>(),
+		scale_modifier,
+		rotations.contiguous().data_ptr<float>(),
+		cov3D_precomp.contiguous().data<float>(), 
+		viewmatrix.contiguous().data<float>(), 
+		projmatrix.contiguous().data<float>(),
+		campos.contiguous().data<float>(),
+		tan_fovx,
+		tan_fovy,
+		prefiltered,
+		out_color.contiguous().data<float>(),
+		out_invdepth.contiguous().data<float>(),
+		accum_weights_ptr.contiguous().data<float>(),
+		accum_weights_count.contiguous().data<float>(),
+		accum_max_count.contiguous().data<float>(),
+		antialiasing,
+		pruning,
+		radii.contiguous().data<int>(),
+		debug);
+		
+		rendered = std::get<0>(tup);
+		num_buckets = std::get<1>(tup);
+  }
+  return std::make_tuple(rendered, num_buckets, out_color, out_invdepth, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer, accum_weights_ptr, accum_weights_count, accum_max_count);
+}

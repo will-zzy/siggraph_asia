@@ -83,6 +83,30 @@ namespace FORWARD
 		float* cov3Ds,
 		const dim3 grid,
 		bool prefiltered);
+
+
+	void render_simp(
+		const dim3 grid, dim3 block,
+		const uint2* ranges,
+		const uint32_t* point_list,
+		const uint32_t* per_tile_bucket_offset, uint32_t* bucket_to_tile,
+		float* sampled_T, float* sampled_ar, float* sampled_ard,
+		int W, int H,
+		const float2* points_xy_image,
+		const float* features,
+		const float4* conic_opacity,
+		float* final_T,
+		uint32_t* n_contrib,
+		uint32_t* max_contrib,
+		float* accum_weights_ptr,
+		float* accum_weights_count,
+		float* accum_max_count,
+		const float* bg_color,
+		float* out_color,
+		float* depths,
+		float* depth);
+
+		
 }
 
 

@@ -47,6 +47,33 @@ def rasterize_gaussians(
         raster_settings,
     )
 
+def rasterize_gaussians_simp(
+    means3D,
+    means2D,
+    dc,
+    sh,
+    colors_precomp,
+    opacities,
+    scales,
+    rotations,
+    cov3Ds_precomp,
+    culling,
+    raster_settings,
+):
+    return _RasterizeGaussians.render_simp(
+        means3D,
+        means2D,
+        dc,
+        sh,
+        colors_precomp,
+        opacities,
+        scales,
+        rotations,
+        cov3Ds_precomp,
+        culling,
+        raster_settings,
+    )
+
 class _RasterizeGaussians(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -187,6 +214,63 @@ class _RasterizeGaussians(torch.autograd.Function):
         )
 
         return grads
+    
+    def render_simp(
+        means3D,
+        means2D,
+        dc,
+        sh,
+        colors_precomp,
+        opacities,
+        scales,
+        rotations,
+        cov3Ds_precomp,
+        culling,
+        raster_settings,
+    ):
+
+        # Restructure arguments the way that the C++ lib expects them
+        args = (
+            raster_settings.bg, 
+            means3D,
+            colors_precomp,
+            opacities,
+            scales,
+            rotations,
+            raster_settings.scale_modifier,
+            cov3Ds_precomp,
+            raster_settings.viewmatrix,
+            raster_settings.projmatrix,
+            raster_settings.projmatrix_raw,
+            raster_settings.tanfovx,
+            raster_settings.tanfovy,
+            raster_settings.image_height,
+            raster_settings.image_width,
+            dc,
+            sh,
+            raster_settings.sh_degree,
+            raster_settings.campos,
+            raster_settings.prefiltered,
+            raster_settings.antialiasing,
+            False,
+            raster_settings.debug
+        )
+
+        # Invoke C++/CUDA rasterizer
+        if raster_settings.debug:
+            cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
+            try:
+                num_rendered, num_buckets, color, invdepths, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer = _C.rasterize_gaussians(*args)
+            except Exception as ex:
+                torch.save(cpu_args, "snapshot_fw.dump")
+                print("\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
+                raise ex
+        else:
+            num_rendered, num_buckets, color, invdepths, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer, accum_weights_ptr, accum_weights_count, accum_max_count = _C.rasterize_gaussians(*args)
+
+        # Keep relevant tensors for backward
+        return color, radii, invdepths, accum_weights_ptr, accum_weights_count, accum_max_count
+
 
 class GaussianRasterizationSettings(NamedTuple):
     image_height: int
@@ -290,6 +374,46 @@ class GaussianRasterizer(nn.Module):
             raster_settings.prefiltered,
             raster_settings.debug)
         return  radii
+    
+    def render_simp(self, means3D, means2D, opacities, culling, dc = None, shs = None, colors_precomp = None, scales = None, rotations = None, cov3D_precomp = None):
+        
+        raster_settings = self.raster_settings
+
+        if (shs is None and colors_precomp is None) or (shs is not None and colors_precomp is not None):
+            raise Exception('Please provide excatly one of either SHs or precomputed colors!')
+        
+        if ((scales is None or rotations is None) and cov3D_precomp is None) or ((scales is not None or rotations is not None) and cov3D_precomp is not None):
+            raise Exception('Please provide exactly one of either scale/rotation pair or precomputed 3D covariance!')
+        
+        if dc is None:
+            dc = torch.Tensor([])            
+        if shs is None:
+            shs = torch.Tensor([])
+        if colors_precomp is None:
+            colors_precomp = torch.Tensor([])
+
+        if scales is None:
+            scales = torch.Tensor([])
+        if rotations is None:
+            rotations = torch.Tensor([])
+        if cov3D_precomp is None:
+            cov3D_precomp = torch.Tensor([])
+
+        # Invoke C++/CUDA rasterization routine
+        return rasterize_gaussians_simp(
+            means3D,
+            means2D,
+            dc,
+            shs,
+            colors_precomp,
+            opacities,
+            scales, 
+            rotations,
+            cov3D_precomp,
+            culling,
+            raster_settings,
+        )
+    
 
 class SparseGaussianAdam(torch.optim.Adam):
     def __init__(self, params, lr, eps):

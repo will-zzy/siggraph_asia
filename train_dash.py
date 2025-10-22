@@ -78,9 +78,9 @@ def anySplat(dataset, opt, pipe):
     pred_all_intrinsic = pred_context_pose['intrinsic']
     # save_interpolated_video(pred_all_extrinsic, pred_all_intrinsic, b, h, w, gaussians, image_folder, model.decoder)
 
-def align(gaussians):
-
-
+def align(gaussians, ):
+    from tnt_eval.registration import trajectory_alignment
+    trajectory_alignment(None, anySplat_traj, slam_traj, , )
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, log_file=None):
 
