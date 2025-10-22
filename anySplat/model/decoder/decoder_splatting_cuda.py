@@ -11,7 +11,7 @@ from ..types import Gaussians
 # from .cuda_splatting import DepthRenderingMode, render_cuda
 from .decoder import Decoder, DecoderOutput
 from math import sqrt 
-from gsplat import rasterization
+# from gsplat import rasterization
 
 from ...misc.utils import vis_depth_map
 

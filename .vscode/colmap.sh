@@ -91,10 +91,11 @@ addGaussianInitPoints(){
 
 }
 
-case=$1
+# case=$1
+case=1747834320424
 root_dir=~/data/Final/$case
 
 preprocess $root_dir $case
 # sparse_reconstruction $root_dir images
-mono_prior $root_dir
+# mono_prior $root_dir
 # addGaussianInitPoints $root_dir

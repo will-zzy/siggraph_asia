@@ -11,3 +11,5 @@ data
 tiny-cuda-nn
 # weight
 metric_depth_vit_giant2_800k.pth
+model.safetensors
+model.safetensors*

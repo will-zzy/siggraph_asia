@@ -14,9 +14,10 @@ from random import randint
 from utils.loss_utils import l1_loss, ssim
 from utils.camera_utils import update_pose
 # from gaussian_renderer import render, network_gui
-from gaussian_renderer import prefilter_voxel, render, network_gui
+from gaussian_renderer import prefilter_voxel, render, network_gui, render_origin, render_simp
 import sys
 from scene import Scene, GaussianModel
+from scene.gaussian_model import GaussianModel_origin
 from utils.general_utils import safe_state, get_expon_lr_func
 import uuid
 from tqdm import tqdm
@@ -58,7 +59,8 @@ def anySplat(dataset, opt, pipe):
     from utils.image_utils import process_image
 
     # Load the model from Hugging Face
-    model = AnySplat.from_pretrained("./anySplat/ckpt/anysplat")
+    # model = AnySplat.from_pretrained("./anySplat/ckpt/model.safetensors")
+    model = AnySplat.from_pretrained("lhjiang/anysplat")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -66,8 +68,12 @@ def anySplat(dataset, opt, pipe):
         param.requires_grad = False
 
     # Load and preprocess example images (replace with your own image paths)
-    image_names = ["path/to/imageA.png", "path/to/imageB.png", "path/to/imageC.png"] 
-    images = [process_image(image_name) for image_name in image_names]
+    images_dir = os.path.join(dataset.source_path, "images")
+    image_names = os.listdir(images_dir)
+    imgs = []
+    for img_name in image_names:
+        imgs.append(os.path.join(images_dir, img_name))
+    images = [process_image(image_name) for image_name in imgs]
     images = torch.stack(images, dim=0).unsqueeze(0).to(device) # [1, K, 3, 448, 448]
     b, v, _, h, w = images.shape
 
@@ -76,11 +82,37 @@ def anySplat(dataset, opt, pipe):
 
     pred_all_extrinsic = pred_context_pose['extrinsic']
     pred_all_intrinsic = pred_context_pose['intrinsic']
+    return gaussians, pred_all_extrinsic, pred_all_intrinsic
     # save_interpolated_video(pred_all_extrinsic, pred_all_intrinsic, b, h, w, gaussians, image_folder, model.decoder)
 
-def align(gaussians, ):
-    from tnt_eval.registration import trajectory_alignment
-    trajectory_alignment(None, anySplat_traj, slam_traj, , )
+
+def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path):
+    """
+    Align AnySplat trajectory to SLAM trajectory, apply the estimated similarity
+    transform to the Gaussian model, and export the updated point cloud.
+    """
+    from tnt_eval.registration import (
+        estimate_similarity_transform,
+        apply_similarity_transform_to_gaussians,
+    )
+
+    if gaussians is None:
+        raise ValueError("Gaussian model is required for alignment.")
+
+    transform, stats = estimate_similarity_transform(anysplat_traj, slam_traj)
+    apply_similarity_transform_to_gaussians(
+        gaussians,
+        transform,
+        rotation=stats.get("rotation"),
+        translation=stats.get("translation"),
+        scale=stats.get("scale"),
+    )
+
+    if ply_path is not None:
+        gaussians.save_ply(ply_path)
+
+    return transform, stats
+
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, log_file=None):
 
@@ -91,7 +123,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     tb_writer = prepare_output_and_logger(dataset)
     # gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
-                              dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
+                              dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist) if not pipe.useFF else \
+                GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians, shuffle=False)
     # scene = Scene(dataset, gaussians, ply_path=ply_path, shuffle=False)
     gaussians.training_setup(opt)
@@ -174,8 +207,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if render_scale > 1:
             gt_image = torch.nn.functional.interpolate(gt_image[None], scale_factor=1/render_scale, mode="bilinear", 
                                                        recompute_scale_factor=True, antialias=True)[0]
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad)
-        image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
+        if not pipe.useFF:
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad)
+            image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
+        else:
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:])
+            image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # if viewpoint_cam.alpha_mask is not None:
         #     alpha_mask = viewpoint_cam.alpha_mask.cuda()
@@ -251,56 +288,97 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
 
+            if not pipe.useFF: # 不使用FF，使用scaffold-GS
+                # Densification
+                if iteration < opt.densify_until_iter and iteration > opt.start_stat:
+                    # Keep track of max radii in image-space for pruning
+                    gaussians.training_statis(viewspace_point_tensor, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
+                    # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                    # gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                    if iteration > opt.update_from and iteration % opt.update_interval == 0:
+                        gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity, scheduler=scheduler)
+                    # if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                    #     # Apply DashGaussian primitive scheduler to control densification.
+                    #     densify_rate = scheduler.get_densify_rate(iteration, gaussians.get_anchor.shape[0], render_scale)
+                    #     momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
+                    #                                                size_threshold, radii, densify_rate=densify_rate)
+                    #     # Update max_n_gaussian
+                    #     scheduler.update_momentum(momentum_add)
+                    #     # Update render scale based on the DashGaussian resolution scheduler. 
+                    #     render_scale = scheduler.get_res_scale(iteration)
 
-            # Densification
-            if iteration < opt.densify_until_iter and iteration > opt.start_stat:
-                # Keep track of max radii in image-space for pruning
-                gaussians.training_statis(viewspace_point_tensor, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
-                # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                # gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-                if iteration > opt.update_from and iteration % opt.update_interval == 0:
-                    gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity, scheduler=scheduler)
-                # if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                #     # Apply DashGaussian primitive scheduler to control densification.
-                #     densify_rate = scheduler.get_densify_rate(iteration, gaussians.get_anchor.shape[0], render_scale)
-                #     momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
-                #                                                size_threshold, radii, densify_rate=densify_rate)
-                #     # Update max_n_gaussian
-                #     scheduler.update_momentum(momentum_add)
-                #     # Update render scale based on the DashGaussian resolution scheduler. 
-                #     render_scale = scheduler.get_res_scale(iteration)
-                
-                # if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                #     gaussians.reset_opacity()
-            elif iteration == opt.update_until:
-                del gaussians.opacity_accum
-                del gaussians.offset_gradient_accum
-                del gaussians.offset_denom
-                torch.cuda.empty_cache()
+                    # if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                    #     gaussians.reset_opacity()
+                elif iteration == opt.update_until:
+                    del gaussians.opacity_accum
+                    del gaussians.offset_gradient_accum
+                    del gaussians.offset_denom
+                    torch.cuda.empty_cache()
 
-            # Optimizer step
-            if iteration < opt.iterations:
-                # gaussians.exposure_optimizer.step()
-                # gaussians.exposure_optimizer.zero_grad(set_to_none = True)
-                # if use_sparse_adam:
-                #     visible = radii > 0
-                #     gaussians.optimizer.step(visible, radii.shape[0])
-                #     gaussians.optimizer.zero_grad(set_to_none = True)
-                # else:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
-                viewpoint_cam.pose_optimizer.step()
-                viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
+                # Optimizer step
+                if iteration < opt.iterations:
+                    # gaussians.exposure_optimizer.step()
+                    # gaussians.exposure_optimizer.zero_grad(set_to_none = True)
+                    # if use_sparse_adam:
+                    #     visible = radii > 0
+                    #     gaussians.optimizer.step(visible, radii.shape[0])
+                    #     gaussians.optimizer.zero_grad(set_to_none = True)
+                    # else:
+                    gaussians.optimizer.step()
+                    gaussians.optimizer.zero_grad(set_to_none = True)
+                    viewpoint_cam.pose_optimizer.step()
+                    viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
 
-            # optim_end.record()
-            # torch.cuda.synchronize()
-            # optim_time = optim_start.elapsed_time(optim_end)
-            # total_time += (iter_time + optim_time) / 1e3
+                # optim_end.record()
+                # torch.cuda.synchronize()
+                # optim_time = optim_start.elapsed_time(optim_end)
+                # total_time += (iter_time + optim_time) / 1e3
 
-            if (iteration in checkpoint_iterations):
-                print("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+                if (iteration in checkpoint_iterations):
+                    print("\n[ITER {}] Saving Checkpoint".format(iteration))
+                    torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+            
+            
+            
+            
+            
+            elif pipe.useFF: # 使用原版的
+                if iteration < opt.densify_until_iter:
+                    # Keep track of max radii in image-space for pruning
+                    gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                        size_threshold = 20 if iteration > opt.opacity_reset_interval else None
+                        # Apply DashGaussian primitive scheduler to control densification.
+                        densify_rate = scheduler.get_densify_rate(iteration, gaussians.get_xyz.shape[0], render_scale)
+                        momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
+                                                                   size_threshold, radii, densify_rate=densify_rate)
+                        # Update max_n_gaussian
+                        scheduler.update_momentum(momentum_add)
+                        # Update render scale based on the DashGaussian resolution scheduler. 
+                        render_scale = scheduler.get_res_scale(iteration)
+
+                    if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                        gaussians.reset_opacity()
+
+                # Optimizer step
+                if iteration < opt.iterations:
+                    gaussians.exposure_optimizer.step()
+                    gaussians.exposure_optimizer.zero_grad(set_to_none = True)
+                    if use_sparse_adam:
+                        visible = radii > 0
+                        gaussians.optimizer.step(visible, radii.shape[0])
+                        gaussians.optimizer.zero_grad(set_to_none = True)
+                    else:
+                        gaussians.optimizer.step()
+                        gaussians.optimizer.zero_grad(set_to_none = True)
+
+                    viewpoint_cam.pose_optimizer.step()
+                    viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
+            
+            
             if iteration > 1000 and iteration % 400 == 0 and iteration < opt.update_until :
                 # update_pose(viewpoint_cam)
                 for view in scene.getTrainCameras():
@@ -441,7 +519,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7000,30000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--use_FF", action="store_true")
+    parser.add_argument("--useFF", type=bool, default=False)
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -453,8 +531,8 @@ if __name__ == "__main__":
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
-    if args.use_FF:
-        anySplat(lp.extract(args), op.extract(args), pp.extract(args)s)
+    if args.useFF:
+        gaussians, pred_all_extrinsic, pred_all_intrinsic = anySplat(lp.extract(args), op.extract(args), pp.extract(args))
     # Start GUI server, configure and run training
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)

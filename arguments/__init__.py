@@ -85,6 +85,7 @@ class PipelineParams(ParamGroup):
         self.resolution_mode = "const"
         self.densify_mode = "free"
         self.max_n_gaussian = -1
+        self.use_FF = False
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
