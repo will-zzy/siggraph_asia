@@ -36,7 +36,7 @@
 import math
 from typing import Sequence, Tuple, Union
 
-from trajectory_io import read_trajectory, convert_trajectory_to_pointcloud
+from tnt_eval.trajectory_io import read_trajectory, convert_trajectory_to_pointcloud
 import copy
 import numpy as np
 import open3d as o3d

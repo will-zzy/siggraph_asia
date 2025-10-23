@@ -423,7 +423,7 @@ class GaussianModel:
         self.offset_gradient_accum = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
         self.offset_denom = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
         self.anchor_demon = torch.zeros((self.get_anchor.shape[0], 1), device="cuda")
-
+        
         
         
         if self.use_feat_bank:
@@ -1378,6 +1378,7 @@ class GaussianModel_origin:
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
         self.optimizer = None
+        self.pretrained_exposures = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
         self.setup_functions()
@@ -1392,7 +1393,7 @@ class GaussianModel_origin:
             self._rotation,
             self._opacity,
             self.max_radii2D,
-            self.xyz_gradient_accum,
+            self.xyz_gradient_accum, 
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
@@ -1415,6 +1416,11 @@ class GaussianModel_origin:
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
+        
+    def set_appearance(self, num_cameras):
+        pass
+        # if self.appearance_dim > 0:
+        #     self.embedding_appearance = Embedding(num_cameras, self.appearance_dim).cuda()
 
     @property
     def get_scaling(self):
@@ -1496,7 +1502,7 @@ class GaussianModel_origin:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
@@ -1515,23 +1521,23 @@ class GaussianModel_origin:
                 # A special version of the rasterizer is required to enable sparse adam
                 self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
-        self.exposure_optimizer = torch.optim.Adam([self._exposure])
+        # self.exposure_optimizer = torch.optim.Adam([self._exposure])
 
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
         
-        self.exposure_scheduler_args = get_expon_lr_func(training_args.exposure_lr_init, training_args.exposure_lr_final,
-                                                        lr_delay_steps=training_args.exposure_lr_delay_steps,
-                                                        lr_delay_mult=training_args.exposure_lr_delay_mult,
-                                                        max_steps=training_args.iterations)
+        # self.exposure_scheduler_args = get_expon_lr_func(training_args.exposure_lr_init, training_args.exposure_lr_final,
+        #                                                 lr_delay_steps=training_args.exposure_lr_delay_steps,
+        #                                                 lr_delay_mult=training_args.exposure_lr_delay_mult,
+        #                                                 max_steps=training_args.iterations)
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
-        if self.pretrained_exposures is None:
-            for param_group in self.exposure_optimizer.param_groups:
-                param_group['lr'] = self.exposure_scheduler_args(iteration)
+        # if self.pretrained_exposures is None:
+            # for param_group in self.exposure_optimizer.param_groups:
+            #     param_group['lr'] = self.exposure_scheduler_args(iteration)
 
         for param_group in self.optimizer.param_groups:
             if param_group["name"] == "xyz":

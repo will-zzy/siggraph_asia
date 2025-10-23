@@ -450,6 +450,7 @@ def prefilter_voxel(viewpoint_camera,
     Background tensor (bg_color) must be on GPU!
     """
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
+    
     screenspace_points = torch.zeros_like(pc.get_anchor, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
     try:
         screenspace_points.retain_grad()

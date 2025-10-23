@@ -6,6 +6,7 @@ import time
 from os import makedirs
 import shutil, pathlib
 from pathlib import Path
+import json
 from PIL import Image
 import torchvision.transforms.functional as tf
 # from lpipsPyTorch import lpips
@@ -25,6 +26,9 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from utils.schedule_utils import TrainingScheduler
+from utils.robotic_utils import sh_rotation, matrix_to_quaternion, quaternion_to_matrix, load_ply, save_ply
+
+
 import cv2
 import csv
 lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
@@ -47,6 +51,12 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 UPLOAD_IMG = False
+from typing import NamedTuple
+class CamNamePoseInfo(NamedTuple):
+    image_name: str
+    R: np.array
+    T: np.array
+    pose: np.array # 注意anySplat出来的c2w
 def anySplat(dataset, opt, pipe):
     
     from pathlib import Path
@@ -55,12 +65,53 @@ def anySplat(dataset, opt, pipe):
     import sys
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+    try:
+        from safetensors.torch import load_file
+    except ImportError as exc:
+        raise ImportError(
+            "safetensors is required for loading local AnySplat checkpoints. "
+            "Please install it with `pip install safetensors`."
+        ) from exc
     from anySplat.model.model.anysplat import AnySplat
     from utils.image_utils import process_image
 
     # Load the model from Hugging Face
     # model = AnySplat.from_pretrained("./anySplat/ckpt/model.safetensors")
-    model = AnySplat.from_pretrained("lhjiang/anysplat")
+    # model = AnySplat.from_pretrained("lhjiang/anysplat")
+    ckpt_root = Path("./anySplat/ckpt")
+    config_path = ckpt_root / "config.json"
+    weights_path = ckpt_root / "model.safetensors"
+    if not config_path.is_file():
+        raise FileNotFoundError(f"AnySplat config not found: {config_path}")
+    if not weights_path.is_file():
+        raise FileNotFoundError(f"AnySplat weights not found: {weights_path}")
+
+    with config_path.open("r", encoding="utf-8") as f:
+        config_dict = json.load(f)
+
+    encoder_cfg_dict = config_dict.get("encoder_cfg")
+    decoder_cfg_dict = config_dict.get("decoder_cfg")
+    if encoder_cfg_dict is None or decoder_cfg_dict is None:
+        raise ValueError(f"Invalid AnySplat config structure: {config_path}")
+
+    from anySplat.model.encoder.anysplat import EncoderAnySplatCfg
+    from anySplat.model.decoder.decoder_splatting_cuda import DecoderSplattingCUDACfg
+
+    vggt_override = os.environ.get("ANY_SPLAT_VGGT_WEIGHTS")
+    if vggt_override:
+        encoder_cfg_dict["pretrained_weights"] = vggt_override
+
+    encoder_cfg = EncoderAnySplatCfg(**encoder_cfg_dict)
+    decoder_cfg = DecoderSplattingCUDACfg(**decoder_cfg_dict)
+    model = AnySplat(encoder_cfg, decoder_cfg)
+
+    state_dict = load_file(str(weights_path))
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+    if missing_keys:
+        print(f"[AnySplat] Missing keys when loading weights: {missing_keys}")
+    if unexpected_keys:
+        print(f"[AnySplat] Unexpected keys when loading weights: {unexpected_keys}")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
@@ -68,25 +119,59 @@ def anySplat(dataset, opt, pipe):
         param.requires_grad = False
 
     # Load and preprocess example images (replace with your own image paths)
+    
     images_dir = os.path.join(dataset.source_path, "images")
-    image_names = os.listdir(images_dir)
+    from scene.colmap_loader import read_extrinsics_text, qvec2rotmat
+    cameras_extrinsic_file = os.path.join(dataset.source_path, "sparse/0", "images.txt")
+    cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
     imgs = []
-    for img_name in image_names:
+    cams_unsorted = []
+    for idx, key in enumerate(cam_extrinsics):
+        extr = cam_extrinsics[key]
+        R = qvec2rotmat(extr.qvec)
+        T = np.array(extr.tvec).reshape(-1, 1)
+        c2w = np.concatenate([R, T], axis=1) # 注意anySplat出来的是c2w
+        c2w = np.linalg.inv(np.concatenate([c2w, np.array([[0.0, 0.0, 0.0, 1.0]])], axis=0))
+        cams_unsorted.append(CamNamePoseInfo(image_name=extr.name, R=R, T=T, pose=c2w))
+    cams = sorted(cams_unsorted.copy(), key = lambda x : x.image_name)
+    
+    # image_names = os.listdir(images_dir)
+    slam_c2ws = []
+    for cam in cams:
+        img_name = cam.image_name
         imgs.append(os.path.join(images_dir, img_name))
+        slam_c2ws.append(cam.pose[None])
+    slam_c2ws = np.concatenate(slam_c2ws, axis=0)
     images = [process_image(image_name) for image_name in imgs]
     images = torch.stack(images, dim=0).unsqueeze(0).to(device) # [1, K, 3, 448, 448]
     b, v, _, h, w = images.shape
 
     # Run Inference
-    gaussians, pred_context_pose = model.inference((images+1)*0.5)
-
-    pred_all_extrinsic = pred_context_pose['extrinsic']
-    pred_all_intrinsic = pred_context_pose['intrinsic']
-    return gaussians, pred_all_extrinsic, pred_all_intrinsic
+    gs, pred_context_pose = model.inference((images+1)*0.5)
+    # gaussians.mean
+    downsample = 8
+    gaussians = GaussianModel_origin(4, "sparse_adam")
+    gaussians._xyz = gs.means[0, ::downsample, ...]
+    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::downsample, ...])
+    gaussians._opacity = gaussians.inverse_opacity_activation(gs.opacities[0, ::downsample, ...][..., None])
+    gaussians._rotation = gs.rotations[0, ::downsample, ...]
+    gaussians._features_dc = gs.harmonics[0, ::downsample, :, :1].transpose(1, 2)
+    gaussians._features_rest = gs.harmonics[0, ::downsample, :, 1:].transpose(1, 2)
+    
+    del gs, model
+    torch.cuda.empty_cache()
+    
+    # gaussians.save_ply("/home/zzy/lib/siggraph_asia/tmp.ply")
+    
+    pred_all_extrinsic = pred_context_pose['extrinsic'][0] # [N_nums, 4, 4]
+    pred_all_intrinsic = pred_context_pose['intrinsic'][0] # [N_nums, 3, 3]
+    
+    transform, stats, gaussians_aligned = align(gaussians=gaussians, anysplat_traj=pred_all_extrinsic, slam_traj=slam_c2ws)
+    return gaussians_aligned, pred_all_extrinsic, pred_all_intrinsic
     # save_interpolated_video(pred_all_extrinsic, pred_all_intrinsic, b, h, w, gaussians, image_folder, model.decoder)
 
 
-def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path):
+def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=None):
     """
     Align AnySplat trajectory to SLAM trajectory, apply the estimated similarity
     transform to the Gaussian model, and export the updated point cloud.
@@ -94,24 +179,167 @@ def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path):
     from tnt_eval.registration import (
         estimate_similarity_transform,
         apply_similarity_transform_to_gaussians,
+        _trajectory_to_pose_tensor,
     )
 
     if gaussians is None:
         raise ValueError("Gaussian model is required for alignment.")
 
     transform, stats = estimate_similarity_transform(anysplat_traj, slam_traj)
-    apply_similarity_transform_to_gaussians(
-        gaussians,
-        transform,
-        rotation=stats.get("rotation"),
-        translation=stats.get("translation"),
-        scale=stats.get("scale"),
-    )
+    
+    
+    # align_out = apply_similarity_transform_to_gaussians(
+    #     gaussians, # {"scale": scale, "rotation_quaternion": rotation_matrix_to_quaternion(rotation)}
+    #     transform,
+    #     rotation=stats.get("rotation"),
+    #     translation=stats.get("translation"),
+    #     scale=stats.get("scale"),
+    # )
+    rotation=torch.tensor(stats.get("rotation"),device=gaussians._xyz.device).float()
+    translation=torch.tensor(stats.get("translation"),device=gaussians._xyz.device).float()
+    scale=torch.tensor(stats.get("scale"),device=gaussians._xyz.device).float()
+    
+    
+    # rotation = transform_matrix[:3, :3]
+    # translation = transform_matrix[None, :3, 3]
+    # scale_check = (rotation @ rotation.T)[0, 0] ** 0.5
+    # rotation_pure = rotation / scale_check
+    xyz = gaussians._xyz
+    xyz = scale * (xyz @ rotation.T) + translation
+    gaussians._xyz.data.copy_(xyz)
+    del xyz
+    
+    scaling = gaussians._scaling
+    scaling = scaling + torch.log(scale * 4)
+    gaussians._scaling.data.copy_(scaling)
+    del scaling
+    
+    rots = gaussians._rotation
+    rot_matrices = quaternion_to_matrix(rots)
+    new_rot_matrices = rotation @ rot_matrices
+    rots = matrix_to_quaternion(new_rot_matrices)
+    rots = rots / torch.norm(rots, dim=-1, keepdim=True)
+    gaussians._rotation.data.copy_(rots)
+    del rots, rot_matrices, new_rot_matrices
+    
+    features_extra = gaussians._features_rest
+    features_extra = sh_rotation(features_extra.reshape((features_extra.shape[0],3,-1)), gaussians._features_dc, rotation)
+    del features_extra
+
+    # gaussian_new = GaussianModel_origin(4, "sparse_adam")
+    # gaussian_new._xyz = xyz
+    # gaussian_new._scaling = scaling
+    # gaussian_new._rotation = rots
+    # gaussian_new._opacity = gaussians._opacity
+    # gaussian_new._features_dc = features_dc
+    # gaussian_new._features_rest = features_extra
+    
+    
+    # xyz_np = xyz.cpu().numpy()
+    # features_dc_np = features_dc.reshape(-1, 3).cpu().numpy()
+    # features_extra_np = features_extra.reshape(-1, 45).cpu().numpy()
+    # opacities_np = opacities.cpu().numpy()
+    # scales_np = scales.cpu().numpy()
+    # rots_np = rots.cpu().numpy()
 
     if ply_path is not None:
         gaussians.save_ply(ply_path)
 
-    return transform, stats
+    # Prepare debug outputs (plot + point clouds) to inspect alignment quality.
+    try:
+        source_tensor = _trajectory_to_pose_tensor(anysplat_traj)
+        target_tensor = _trajectory_to_pose_tensor(slam_traj)
+    except Exception as exc:
+        print(f"[align] Unable to convert trajectories for visualization: {exc}")
+        return transform, stats
+
+    rotation = stats.get("rotation")
+    translation = stats.get("translation")
+    scale = stats.get("scale")
+
+    if rotation is None or translation is None or scale is None:
+        print("[align] Missing rotation/translation/scale in stats; skip visualization.")
+        return transform, stats
+
+    rotation = np.asarray(rotation, dtype=np.float64)
+    translation = np.asarray(translation, dtype=np.float64)
+    scale = float(scale)
+
+    source_centers = source_tensor[:, :3, 3].cpu().numpy()
+    aligned_centers = (rotation @ source_centers.T).T
+    aligned_centers = scale * aligned_centers + translation
+    gt_centers = target_tensor[:, :3, 3].cpu().numpy()
+
+    base_dir = Path(ply_path).parent if ply_path is not None else Path.cwd() / "align_outputs"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    base_name = Path(ply_path).stem if ply_path is not None else "align"
+    unique_tag = uuid.uuid4().hex[:8]
+    prefix = f"{base_name}_{unique_tag}"
+
+    png_path = base_dir / f"{prefix}_traj.png"
+    aligned_ply_path = base_dir / f"{prefix}_aligned_traj.ply"
+    gt_ply_path = base_dir / f"{prefix}_gt_traj.ply"
+
+    # Save 3D trajectory plot.
+    try:
+        import matplotlib
+        import sys as _sys
+
+        if "matplotlib.pyplot" not in _sys.modules:
+            matplotlib.use("Agg")  # Ensure headless plotting.
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+        fig = plt.figure(figsize=(6, 6))
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot(
+            aligned_centers[:, 0],
+            aligned_centers[:, 1],
+            aligned_centers[:, 2],
+            label="aligned traj",
+            color="tab:blue",
+        )
+        ax.plot(
+            gt_centers[:, 0],
+            gt_centers[:, 1],
+            gt_centers[:, 2],
+            label="gt traj",
+            color="tab:orange",
+        )
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.set_title("Trajectory Alignment")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(png_path, dpi=300)
+        plt.close(fig)
+        stats["trajectory_plot_png"] = str(png_path)
+    except Exception as exc:
+        print(f"[align] Failed to save trajectory plot: {exc}")
+
+    # Save aligned and GT trajectories as point clouds.
+    try:
+        import open3d as o3d
+
+        aligned_pcd = o3d.geometry.PointCloud()
+        aligned_pcd.points = o3d.utility.Vector3dVector(
+            np.asarray(aligned_centers, dtype=np.float64)
+        )
+        o3d.io.write_point_cloud(str(aligned_ply_path), aligned_pcd)
+
+        gt_pcd = o3d.geometry.PointCloud()
+        gt_pcd.points = o3d.utility.Vector3dVector(
+            np.asarray(gt_centers, dtype=np.float64)
+        )
+        o3d.io.write_point_cloud(str(gt_ply_path), gt_pcd)
+
+        stats["aligned_traj_ply"] = str(aligned_ply_path)
+        stats["gt_traj_ply"] = str(gt_ply_path)
+    except Exception as exc:
+        print(f"[align] Failed to save trajectory point clouds: {exc}")
+
+    return transform, stats, gaussians
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, log_file=None):
@@ -122,11 +350,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     # gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
-    gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
-                              dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist) if not pipe.useFF else \
-                GaussianModel(dataset.sh_degree, opt.optimizer_type)
-    scene = Scene(dataset, gaussians, shuffle=False)
-    # scene = Scene(dataset, gaussians, ply_path=ply_path, shuffle=False)
+    gaussians = None
+    if args.useFF:
+        gaussians, pred_all_extrinsic, pred_all_intrinsic = anySplat(lp.extract(args), op.extract(args), pp.extract(args))
+        # align()
+        gaussians.xyz_gradient_accum = torch.zeros((gaussians.get_xyz.shape[0], 1), device=gaussians.get_xyz.device)
+        gaussians.denom = torch.zeros((gaussians.get_xyz.shape[0], 1), device=gaussians.get_xyz.device)
+        
+    
+    else:
+        gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
+                              dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
+    scene = Scene(dataset, gaussians, pipe, shuffle=False)
+    
+    
+    
+    
     gaussians.training_setup(opt)
     if checkpoint:
         
@@ -191,16 +430,24 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         if not viewpoint_stack:
             viewpoint_stack = scene.getTrainCameras().copy()
             viewpoint_indices = list(range(len(viewpoint_stack)))
+        viewpoint_indices = list(range(len(viewpoint_stack)))
         rand_idx = randint(0, len(viewpoint_indices) - 1)
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
-        vind = viewpoint_indices.pop(rand_idx)
+        # vind = viewpoint_indices.pop(rand_idx)
+        # pred_w2c = torch.inverse(pred_all_extrinsic[rand_idx, ...])
+        # viewpoint_cam.R = pred_w2c[:3, :3].T
+        # viewpoint_cam.T = pred_w2c[:3, 3]
+        # viewpoint_cam.update_W2C = False
+        # viewpoint_cam.update_W2I = False
+        # viewpoint_cam.update_center = False
 
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
-        voxel_visible_mask = prefilter_voxel(viewpoint_cam, gaussians, pipe, background)
+        if not pipe.useFF:
+            voxel_visible_mask = prefilter_voxel(viewpoint_cam, gaussians, pipe, background)
         retain_grad = (iteration < opt.update_until and iteration >= 0)
         # Rescale GT image for DashGaussian
         gt_image = viewpoint_cam.original_image.cuda()
@@ -211,7 +458,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad)
             image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
         else:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:])
+            render_pkg = render_origin(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:])
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # if viewpoint_cam.alpha_mask is not None:
@@ -249,12 +496,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         iter_end.record()
 
         with torch.no_grad():
+            if iteration % 200 == 0:
+                image_write = image.permute(1,2,0).detach().cpu().numpy()
+                image_write = (image_write * 255).astype("uint8")
+                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_iter{:06d}.png".format(viewpoint_cam.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+                
+        
+        
+        
+        
+        
+        
+        
+        with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_anchor.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_scaling.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -273,12 +534,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if elapsed_time >= 30 and 30 in time_save_iterations:
                 eval_start_time = time.time()
                 print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
-                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file)
+                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file)
                 eval_time = time.time() - eval_start_time
                 time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
             elif eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
-                eval(scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file)
+                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
@@ -365,8 +626,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 # Optimizer step
                 if iteration < opt.iterations:
-                    gaussians.exposure_optimizer.step()
-                    gaussians.exposure_optimizer.zero_grad(set_to_none = True)
+                    # gaussians.exposure_optimizer.step()
+                    # gaussians.exposure_optimizer.zero_grad(set_to_none = True)
                     if use_sparse_adam:
                         visible = radii > 0
                         gaussians.optimizer.step(visible, radii.shape[0])
@@ -385,7 +646,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     update_pose(view)
     with open(os.path.join(scene.model_path, "TRAIN_INFO"), "w+") as f:
         # f.write("Training Time: {:.2f} seconds, {:.2f} minutes\n".format(total_time, total_time / 60.))
-        f.write("GS Number: {}\n".format(gaussians.get_anchor.shape[0]))
+        f.write("GS Number: {}\n".format(gaussians.get_scaling.shape[0]))
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -445,7 +706,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                     image_write = image.permute(1,2,0).detach().cpu().numpy()
                     image_write = (image_write * 255).astype("uint8")
                     os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-                    cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_{}_iter{:06d}.png".format(config['name'], viewpoint.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+                    cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}_{}.png".format(iteration, config['name'], viewpoint.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
                 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])          
@@ -456,10 +717,10 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                 
         if tb_writer:
             tb_writer.add_histogram("scene/opacity_histogram", scene.gaussians.get_opacity, iteration)
-            tb_writer.add_scalar('total_points', scene.gaussians.get_anchor.shape[0], iteration)
+            tb_writer.add_scalar('total_points', scene.gaussians.get_scaling.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(scene : Scene, renderFunc, renderArgs, iteration: int, time: int, log_file=None):
+def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None):
     torch.cuda.empty_cache()
     config = {'name': 'test', 'cameras' : scene.getTestCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
@@ -469,9 +730,11 @@ def eval(scene : Scene, renderFunc, renderArgs, iteration: int, time: int, log_f
         lpips_test = 0.0
         ssim_test = 0.0
         for idx, viewpoint in enumerate(config['cameras']):
-            voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
-            image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
-            
+            try:
+                voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
+                image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+            except:
+                image = torch.clamp(renderFunc2(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
             gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
@@ -519,7 +782,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7000,30000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[30_000])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--useFF", type=bool, default=False)
+    # parser.add_argument("--useFF", type=bool, default=False)
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -531,8 +794,6 @@ if __name__ == "__main__":
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
-    if args.useFF:
-        gaussians, pred_all_extrinsic, pred_all_intrinsic = anySplat(lp.extract(args), op.extract(args), pp.extract(args))
     # Start GUI server, configure and run training
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)

@@ -13,3 +13,5 @@ tiny-cuda-nn
 metric_depth_vit_giant2_800k.pth
 model.safetensors
 model.safetensors*
+*.ply
+*.pt

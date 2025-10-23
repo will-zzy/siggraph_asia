@@ -22,7 +22,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, pipe, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -80,7 +80,7 @@ class Scene:
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, True)
 
-        if self.loaded_iter:
+        if self.loaded_iter and not pipe.useFF:
             self.gaussians.load_ply_sparse_gaussian(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
@@ -88,14 +88,17 @@ class Scene:
             self.gaussians.load_mlp_checkpoints(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter)))
-        else:
+        elif not pipe.useFF:
             # self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
             self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent) # embedding在gaussian model中声明
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
-        self.gaussians.save_mlp_checkpoints(point_cloud_path)
+        try:
+            self.gaussians.save_mlp_checkpoints(point_cloud_path)
+        except:
+            pass
         # exposure_dict = {
         #     image_name: self.gaussians.get_exposure_from_name(image_name).detach().cpu().numpy().tolist()
         #     for image_name in self.gaussians.exposure_mapping

@@ -1,0 +1,79 @@
+{
+  "decoder_cfg": {
+    "background_color": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "make_scale_invariant": false,
+    "name": "splatting_cuda"
+  },
+  "encoder_cfg": {
+    "add_view": false,
+    "anchor_feat_dim": 128,
+    "apply_bounds_shim": true,
+    "backbone": {
+      "asymmetry_decoder": true,
+      "intrinsics_embed_degree": 4,
+      "intrinsics_embed_loc": "encoder",
+      "intrinsics_embed_type": "token",
+      "model": "ViTLarge_BaseDecoder",
+      "name": "croco",
+      "patch_embed_cls": "PatchEmbedDust3R"
+    },
+    "conf_threshold": 0.1,
+    "d_feature": 32,
+    "distill": false,
+    "freeze_backbone": false,
+    "freeze_module": "patch_embed",
+    "gaussian_adapter": {
+      "gaussian_scale_max": 15.0,
+      "gaussian_scale_min": 0.5,
+      "sh_degree": 4
+    },
+    "gaussians_per_pixel": 1,
+    "gs_keep_ratio": 1.0,
+    "gs_params_head_type": "dpt_gs",
+    "gs_prune": false,
+    "gt_pose_to_pts": false,
+    "input_mean": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "input_std": [
+      0.5,
+      0.5,
+      0.5
+    ],
+    "intermediate_layer_idx": [
+      4,
+      11,
+      17,
+      23
+    ],
+    "n_offsets": 2,
+    "name": "anysplat",
+    "num_monocular_samples": 32,
+    "num_surfaces": 1,
+    "opacity_conf": false,
+    "opacity_mapping": {
+      "final": 0.0,
+      "initial": 0.0,
+      "warm_up": 1
+    },
+    "opacity_threshold": 0.001,
+    "pose_free": true,
+    "pred_head_type": "depth",
+    "pred_pose": true,
+    "pretrained_weights": "",
+    "render_conf": false,
+    "visualizer": {
+      "export_ply": false,
+      "min_resolution": 256,
+      "num_samples": 8
+    },
+    "voxel_size": 0.002,
+    "voxelize": true
+  }
+}

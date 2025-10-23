@@ -15,8 +15,10 @@ class TrainingScheduler():
 	def __init__(self, opt: OptimizationParams, pipe: PipelineParams, gaussians: GaussianModel, original_images: list) -> None:
 
 		self.max_steps = opt.iterations
-		self.init_n_gaussian = gaussians.get_anchor.shape[0] * 5
-
+		try:
+			self.init_n_gaussian = gaussians.get_anchor.shape[0] * 5
+		except:
+			self.init_n_gaussian = gaussians.get_xyz.shape[0] * 5
 		self.densify_mode = pipe.densify_mode
 		self.densify_until_iter = opt.densify_until_iter
 		self.densification_interval = opt.densification_interval

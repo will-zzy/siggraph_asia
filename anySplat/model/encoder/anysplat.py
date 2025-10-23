@@ -4,6 +4,7 @@ import copy
 import os
 import sys
 from copy import deepcopy
+from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Literal, Optional
 
@@ -130,8 +131,67 @@ class EncoderAnySplat(Encoder[EncoderAnySplatCfg]):
 
     def __init__(self, cfg: EncoderAnySplatCfg) -> None:
         super().__init__(cfg)
-        model_full = VGGT.from_pretrained("facebook/VGGT-1B")
-        # model_full = VGGT()
+
+        pretrained_source = (cfg.pretrained_weights or os.environ.get("ANY_SPLAT_VGGT_WEIGHTS", "")).strip()
+        model_full = None
+        local_files_only = False
+
+        if pretrained_source:
+            potential_path = Path(pretrained_source)
+            if potential_path.exists():
+                if potential_path.is_file():
+                    # Direct file provided (.pt / .pth / .bin / .safetensors)
+                    state_dict = None
+                    try:
+                        if potential_path.suffix == ".safetensors":
+                            try:
+                                from safetensors.torch import load_file as safe_load_file
+                            except ImportError as exc:
+                                raise ImportError(
+                                    f"safetensors is required to load '{potential_path}'. "
+                                    "Install it with `pip install safetensors`."
+                                ) from exc
+                            state_dict = safe_load_file(str(potential_path))
+                        else:
+                            state_dict = torch.load(str(potential_path), map_location="cpu")
+                    except Exception as exc:
+                        print(f"[EncoderAnySplat] Failed to read VGGT weights from '{potential_path}': {exc}")
+                    else:
+                        if isinstance(state_dict, dict):
+                            # Unwrap common checkpoint structures.
+                            for key in ("state_dict", "model", "model_state_dict"):
+                                if key in state_dict and isinstance(state_dict[key], dict):
+                                    state_dict = state_dict[key]
+                                    break
+                        model_full = VGGT()
+                        try:
+                            missing, unexpected = model_full.load_state_dict(state_dict, strict=False)
+                            if missing:
+                                print(f"[EncoderAnySplat] Missing VGGT keys: {missing}")
+                            if unexpected:
+                                print(f"[EncoderAnySplat] Unexpected VGGT keys: {unexpected}")
+                        except Exception as exc:
+                            print(f"[EncoderAnySplat] Failed to load VGGT state dict from '{potential_path}': {exc}")
+                            model_full = None
+                else:
+                    # Directory with HuggingFace-style assets.
+                    pretrained_source = str(potential_path)
+                    local_files_only = True
+
+        if model_full is None:
+            source = pretrained_source or "facebook/VGGT-1B"
+            try:
+                model_full = VGGT.from_pretrained(
+                    source,
+                    local_files_only=local_files_only or os.environ.get("HF_HUB_OFFLINE") == "1",
+                )
+            except Exception as exc:
+                print(
+                    f"[EncoderAnySplat] Failed to load VGGT weights from '{source}': {exc}"
+                )
+                print("[EncoderAnySplat] Falling back to randomly initialized VGGT. Results may degrade.")
+                model_full = VGGT()
+
         self.aggregator = model_full.aggregator.to(torch.bfloat16)
         self.freeze_backbone = cfg.freeze_backbone
         self.distill = cfg.distill
