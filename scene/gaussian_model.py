@@ -341,9 +341,10 @@ class GaussianModel:
     #     exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
     #     self._exposure = nn.Parameter(exposure.requires_grad_(True))
     
-    def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
+    def create_from_pcd(self, pcd, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
-        points = pcd.points[::self.ratio]
+        points = pcd.detach().cpu().numpy()[::self.ratio]
+        # points = pcd.points[::self.ratio]
 
         if self.voxel_size <= 0:
             init_points = torch.tensor(points).float().cuda()
