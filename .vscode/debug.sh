@@ -11,12 +11,12 @@ voxel_size=0.01
 appearance_dim=16
 update_init_factor=16
 VGGY_PATH=/home/zzy/lib/siggraph_asia/vggt
-densify_grad_threshold=0.0005
+densify_grad_threshold=0.0002
 
 
 
 feat_dim=64
-n_offsets=10 # 每个anchor的子高斯数
+n_offsets=5 # 每个anchor的子高斯数
 
 densify_until_iter=5000
 update_from=500
@@ -46,6 +46,9 @@ ANY_SPLAT_VGGT_WEIGHTS=$VGGY_PATH python \
     --densify_from_iter $densify_from_iter \
     --densification_interval $densification_interval \
     --update_from $update_from \
-    --update_until $update_until 
+    --update_until $update_until \
+    --n_offsets $n_offsets \
+    --FF_downsample $FF_downsample \
+    --feat_dim $feat_dim
     # --useFF
     # --use_feat_bank true\
