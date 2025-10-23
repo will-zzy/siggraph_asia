@@ -224,6 +224,7 @@ def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=No
     
     features_extra = gaussians._features_rest
     features_extra = sh_rotation(features_extra.reshape((features_extra.shape[0],3,-1)), gaussians._features_dc, rotation)
+    gaussians._features_rest.data.copy_(features_extra.reshape((features_extra.shape[0],-1,3)))
     del features_extra
 
     # gaussian_new = GaussianModel_origin(4, "sparse_adam")
