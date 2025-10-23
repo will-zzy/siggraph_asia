@@ -149,7 +149,8 @@ def anySplat(dataset, opt, pipe):
     # Run Inference
     gs, pred_context_pose = model.inference((images+1)*0.5)
     # gaussians.mean
-    downsample = 8
+    # downsample = 8
+    downsample = pipe.FF_downsample # for scaffold's anchor
     gaussians = GaussianModel_origin(4, "sparse_adam")
     gaussians._xyz = gs.means[0, ::downsample, ...]
     gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::downsample, ...])
@@ -271,74 +272,74 @@ def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=No
     aligned_centers = scale * aligned_centers + translation
     gt_centers = target_tensor[:, :3, 3].cpu().numpy()
 
-    base_dir = Path(ply_path).parent if ply_path is not None else Path.cwd() / "align_outputs"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    base_name = Path(ply_path).stem if ply_path is not None else "align"
-    unique_tag = uuid.uuid4().hex[:8]
-    prefix = f"{base_name}_{unique_tag}"
+    # base_dir = Path(ply_path).parent if ply_path is not None else Path.cwd() / "align_outputs"
+    # base_dir.mkdir(parents=True, exist_ok=True)
+    # base_name = Path(ply_path).stem if ply_path is not None else "align"
+    # unique_tag = uuid.uuid4().hex[:8]
+    # prefix = f"{base_name}_{unique_tag}"
 
-    png_path = base_dir / f"{prefix}_traj.png"
-    aligned_ply_path = base_dir / f"{prefix}_aligned_traj.ply"
-    gt_ply_path = base_dir / f"{prefix}_gt_traj.ply"
+    # png_path = base_dir / f"{prefix}_traj.png"
+    # aligned_ply_path = base_dir / f"{prefix}_aligned_traj.ply"
+    # gt_ply_path = base_dir / f"{prefix}_gt_traj.ply"
 
     # Save 3D trajectory plot.
-    try:
-        import matplotlib
-        import sys as _sys
+    # try:
+    #     import matplotlib
+    #     import sys as _sys
 
-        if "matplotlib.pyplot" not in _sys.modules:
-            matplotlib.use("Agg")  # Ensure headless plotting.
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    #     if "matplotlib.pyplot" not in _sys.modules:
+    #         matplotlib.use("Agg")  # Ensure headless plotting.
+    #     import matplotlib.pyplot as plt
+    #     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-        fig = plt.figure(figsize=(6, 6))
-        ax = fig.add_subplot(111, projection="3d")
-        ax.plot(
-            aligned_centers[:, 0],
-            aligned_centers[:, 1],
-            aligned_centers[:, 2],
-            label="aligned traj",
-            color="tab:blue",
-        )
-        ax.plot(
-            gt_centers[:, 0],
-            gt_centers[:, 1],
-            gt_centers[:, 2],
-            label="gt traj",
-            color="tab:orange",
-        )
-        ax.set_xlabel("X")
-        ax.set_ylabel("Y")
-        ax.set_zlabel("Z")
-        ax.set_title("Trajectory Alignment")
-        ax.legend()
-        fig.tight_layout()
-        fig.savefig(png_path, dpi=300)
-        plt.close(fig)
-        stats["trajectory_plot_png"] = str(png_path)
-    except Exception as exc:
-        print(f"[align] Failed to save trajectory plot: {exc}")
+    #     fig = plt.figure(figsize=(6, 6))
+    #     ax = fig.add_subplot(111, projection="3d")
+    #     ax.plot(
+    #         aligned_centers[:, 0],
+    #         aligned_centers[:, 1],
+    #         aligned_centers[:, 2],
+    #         label="aligned traj",
+    #         color="tab:blue",
+    #     )
+    #     ax.plot(
+    #         gt_centers[:, 0],
+    #         gt_centers[:, 1],
+    #         gt_centers[:, 2],
+    #         label="gt traj",
+    #         color="tab:orange",
+    #     )
+    #     ax.set_xlabel("X")
+    #     ax.set_ylabel("Y")
+    #     ax.set_zlabel("Z")
+    #     ax.set_title("Trajectory Alignment")
+    #     ax.legend()
+    #     fig.tight_layout()
+    #     fig.savefig(png_path, dpi=300)
+    #     plt.close(fig)
+    #     stats["trajectory_plot_png"] = str(png_path)
+    # except Exception as exc:
+    #     print(f"[align] Failed to save trajectory plot: {exc}")
 
-    # Save aligned and GT trajectories as point clouds.
-    try:
-        import open3d as o3d
+    # # Save aligned and GT trajectories as point clouds.
+    # try:
+    #     import open3d as o3d
 
-        aligned_pcd = o3d.geometry.PointCloud()
-        aligned_pcd.points = o3d.utility.Vector3dVector(
-            np.asarray(aligned_centers, dtype=np.float64)
-        )
-        o3d.io.write_point_cloud(str(aligned_ply_path), aligned_pcd)
+    #     aligned_pcd = o3d.geometry.PointCloud()
+    #     aligned_pcd.points = o3d.utility.Vector3dVector(
+    #         np.asarray(aligned_centers, dtype=np.float64)
+    #     )
+    #     o3d.io.write_point_cloud(str(aligned_ply_path), aligned_pcd)
 
-        gt_pcd = o3d.geometry.PointCloud()
-        gt_pcd.points = o3d.utility.Vector3dVector(
-            np.asarray(gt_centers, dtype=np.float64)
-        )
-        o3d.io.write_point_cloud(str(gt_ply_path), gt_pcd)
+    #     gt_pcd = o3d.geometry.PointCloud()
+    #     gt_pcd.points = o3d.utility.Vector3dVector(
+    #         np.asarray(gt_centers, dtype=np.float64)
+    #     )
+    #     o3d.io.write_point_cloud(str(gt_ply_path), gt_pcd)
 
-        stats["aligned_traj_ply"] = str(aligned_ply_path)
-        stats["gt_traj_ply"] = str(gt_ply_path)
-    except Exception as exc:
-        print(f"[align] Failed to save trajectory point clouds: {exc}")
+    #     stats["aligned_traj_ply"] = str(aligned_ply_path)
+    #     stats["gt_traj_ply"] = str(gt_ply_path)
+    # except Exception as exc:
+    #     print(f"[align] Failed to save trajectory point clouds: {exc}")
 
     return transform, stats, gaussians
 
@@ -357,12 +358,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # align()
         gaussians.xyz_gradient_accum = torch.zeros((gaussians.get_xyz.shape[0], 1), device=gaussians.get_xyz.device)
         gaussians.denom = torch.zeros((gaussians.get_xyz.shape[0], 1), device=gaussians.get_xyz.device)
+        scene = Scene(dataset, gaussians, pipe, shuffle=False)
         
     
     else:
         gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
                               dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
-    scene = Scene(dataset, gaussians, pipe, shuffle=False)
+        anchor_xyz, pred_all_extrinsic, pred_all_intrinsic = anySplat(lp.extract(args), op.extract(args), pp.extract(args))
+        scene = Scene(dataset, gaussians, pipe, anchor_xyz, shuffle=False)
     
     
     
@@ -516,7 +519,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_scaling.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
+                if pipe.useFF:
+                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_scaling.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
+                else:
+                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_scaling.shape[0] * dataset.n_offsets}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
