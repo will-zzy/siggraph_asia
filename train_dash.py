@@ -500,7 +500,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 image_write = image.permute(1,2,0).detach().cpu().numpy()
                 image_write = (image_write * 255).astype("uint8")
                 os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_iter{:06d}.png".format(viewpoint_cam.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
                 
         
         

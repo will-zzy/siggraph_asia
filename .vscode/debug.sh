@@ -4,7 +4,7 @@
 case=1747834320424
 root_dir=/home/zzy/data/sa/$case
 # name=sig_GS_R2_speedy_forward
-name=sig_GS_useFF_debug
+name=sig_GS_useScaffold_debug
 # name=sig_GS_R2_baseline
 model_dir=$root_dir/exp/$name
 voxel_size=0.01
@@ -40,6 +40,6 @@ ANY_SPLAT_VGGT_WEIGHTS=$VGGY_PATH python \
     --densify_from_iter $densify_from_iter \
     --densification_interval $densification_interval \
     --update_from $update_from \
-    --update_until $update_until \
-    --useFF
+    --update_until $update_until 
+    # --useFF
     # --use_feat_bank true\
