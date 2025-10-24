@@ -49,19 +49,7 @@ class Camera(nn.Module):
         self.R = torch.tensor(R, device=self.data_device).float()
         self.T = torch.tensor(T, device=self.data_device).float()
         # 位姿优化
-        self.cam_rot_delta = nn.Parameter(
-            torch.zeros(3, requires_grad=True, device=self.data_device)
-        )
-        self.cam_trans_delta = nn.Parameter(
-            torch.zeros(3, requires_grad=True, device=self.data_device)
-        )
         
-        l = [ 
-            {'params': [self.cam_rot_delta], 'lr': 0.00008, "name": "pose_rot_delta"}, # 0.00003
-            {'params': [self.cam_trans_delta], 'lr': 0.00005, "name": "pose_trans_delta"}, # 0.00001
-        ]
-        
-        self.pose_optimizer = torch.optim.Adam(l)
         
         
         resized_image_rgb = PILtoTorch(image, resolution)

@@ -302,7 +302,10 @@ def render(viewpoint_camera,
            use_trained_exp=False, 
            render_size=None, 
            visible_mask=None, 
-           retain_grad=False):
+           retain_grad=False,
+           cam_rot_delta=None,
+           cam_trans_delta=None
+           ):
     """
     Render the scene. 
     
@@ -398,8 +401,8 @@ def render(viewpoint_camera,
             scales = scales,
             rotations = rotations,
             cov3D_precomp = None,
-            theta=viewpoint_camera.cam_rot_delta,
-            rho=viewpoint_camera.cam_trans_delta)
+            theta=cam_rot_delta,
+            rho=cam_trans_delta)
     else:
         rendered_image, radii, depth_image = rasterizer(
             means3D = xyz,
@@ -412,8 +415,8 @@ def render(viewpoint_camera,
             scales = scales,
             rotations = rotations,
             cov3D_precomp = None,
-            theta=viewpoint_camera.cam_rot_delta,
-            rho=viewpoint_camera.cam_trans_delta)
+            theta=cam_rot_delta,
+            rho=cam_trans_delta)
         
     # Apply exposure to rendered image (training only)
     # if use_trained_exp:

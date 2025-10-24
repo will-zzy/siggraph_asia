@@ -7,13 +7,14 @@ from os import makedirs
 import shutil, pathlib
 from pathlib import Path
 import json
+from torch import nn
 from PIL import Image
 import torchvision.transforms.functional as tf
 # from lpipsPyTorch import lpips
 import lpips
 from random import randint
 from utils.loss_utils import l1_loss, ssim
-from utils.camera_utils import update_pose
+from utils.camera_utils import update_pose, update_pose_by_global
 # from gaussian_renderer import render, network_gui
 from gaussian_renderer import prefilter_voxel, render, network_gui, render_origin, render_simp
 import sys
@@ -406,6 +407,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     eval_time = None
     time_save_iterations = [30, 60]  # 30秒和60秒时保存
     
+    data_device = torch.device("cuda")
+    
+    
+    
+    
+    cam_rot_delta = nn.Parameter(
+        torch.zeros(3, requires_grad=True, device=data_device)
+    )
+    cam_trans_delta = nn.Parameter(
+        torch.zeros(3, requires_grad=True, device=data_device)
+    )
+    global_transform = torch.eye(4, device=data_device)
+    
+    l = [ 
+        {'params': [cam_rot_delta], 'lr': 0.00002, "name": "pose_rot_delta"}, # 0.00008
+        {'params': [cam_trans_delta], 'lr': 0.00001, "name": "pose_trans_delta"}, # 0.00005
+    ]
+    
+    pose_optimizer = torch.optim.Adam(l)
+    
     for iteration in range(first_iter, opt.iterations + 1):
         # if network_gui.conn == None:
         #     network_gui.try_connect()
@@ -459,7 +480,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             gt_image = torch.nn.functional.interpolate(gt_image[None], scale_factor=1/render_scale, mode="bilinear", 
                                                        recompute_scale_factor=True, antialias=True)[0]
         if not pipe.useFF:
-            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad)
+            render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)
             image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
         else:
             render_pkg = render_origin(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:])
@@ -505,7 +526,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         #         image_write = (image_write * 255).astype("uint8")
         #         os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
         #         cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
-                
+        #         print(global_transform)
         
         
         
@@ -541,12 +562,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if elapsed_time >= 30 and 30 in time_save_iterations:
                 eval_start_time = time.time()
                 print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
-                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file)
+                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file, global_transform)
                 eval_time = time.time() - eval_start_time
                 time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
             elif (eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
-                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file)
+                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
@@ -595,8 +616,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # else:
                     gaussians.optimizer.step()
                     gaussians.optimizer.zero_grad(set_to_none = True)
-                    viewpoint_cam.pose_optimizer.step()
-                    viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
+                
+                pose_optimizer.step()
+                pose_optimizer.zero_grad(set_to_none = True)
 
                 # optim_end.record()
                 # torch.cuda.synchronize()
@@ -643,14 +665,21 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         gaussians.optimizer.step()
                         gaussians.optimizer.zero_grad(set_to_none = True)
 
-                    viewpoint_cam.pose_optimizer.step()
-                    viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
-            
+                    # viewpoint_cam.pose_optimizer.step()
+                    # viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
+                    pose_optimizer.step()
+                    pose_optimizer.zero_grad(set_to_none=True)
             
             if iteration > 500 and iteration % 300 == 0 and iteration < opt.update_until :
                 # update_pose(viewpoint_cam)
+                update_global=True
                 for view in scene.getTrainCameras():
-                    update_pose(view)
+                    _, global_transform = update_pose(view, cam_trans_delta, cam_rot_delta, global_transform, update_global)
+                    update_global=False
+                    # update_pose(view)
+                
+                cam_rot_delta.data.fill_(0)
+                cam_trans_delta.data.fill_(0)
     with open(os.path.join(scene.model_path, "TRAIN_INFO"), "w+") as f:
         # f.write("Training Time: {:.2f} seconds, {:.2f} minutes\n".format(total_time, total_time / 60.))
         f.write("GS Number: {}\n".format(gaussians.get_scaling.shape[0]))
@@ -728,9 +757,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_scalar('total_points', scene.gaussians.get_scaling.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None):
+def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None):
     torch.cuda.empty_cache()
-    config = {'name': 'test', 'cameras' : scene.getTrainCameras()}
+    config = {'name': 'test', 'cameras' : scene.getTestCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
     if config['cameras'] and len(config['cameras']) > 0:
         l1_test = 0.0
@@ -738,8 +767,10 @@ def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, tim
         lpips_test = 0.0
         ssim_test = 0.0
         for idx, viewpoint in enumerate(config['cameras']):
-            voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
-            image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+            
+            transform_viewpoint = update_pose_by_global(viewpoint, global_transform)
+            voxel_visible_mask = prefilter_voxel(transform_viewpoint, scene.gaussians, pipe, background, 1.0, None)
+            image = torch.clamp(renderFunc(transform_viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
                     
             # try:
             #     voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
@@ -748,7 +779,7 @@ def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, tim
             #     image = torch.clamp(renderFunc2(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
-            gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+            gt_image = torch.clamp(transform_viewpoint.original_image.to("cuda"), 0.0, 1.0)
             if train_test_exp:
                 image = image[..., image.shape[-1] // 2:]
                 gt_image = gt_image[..., gt_image.shape[-1] // 2:]
@@ -759,7 +790,7 @@ def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, tim
             image_write = image.permute(1,2,0).detach().cpu().numpy()
             image_write = (image_write * 255).astype("uint8")
             os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-            cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_{}_iter{:06d}.png".format(config['name'], viewpoint.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_{}_iter{:06d}.png".format(config['name'], transform_viewpoint.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
         
         psnr_test /= len(config['cameras'])
         l1_test /= len(config['cameras'])
