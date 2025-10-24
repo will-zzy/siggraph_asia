@@ -13,7 +13,7 @@ import torchvision.transforms.functional as tf
 import lpips
 from random import randint
 from utils.loss_utils import l1_loss, ssim
-from utils.camera_utils import update_pose
+from utils.camera_utils import update_pose, camera_to_JSON_after_optimization
 # from gaussian_renderer import render, network_gui
 from gaussian_renderer import prefilter_voxel, render, network_gui, render_origin, render_simp
 import sys
@@ -142,7 +142,7 @@ def anySplat(dataset, opt, pipe):
         imgs.append(os.path.join(images_dir, img_name))
         slam_c2ws.append(cam.pose[None])
     slam_c2ws = np.concatenate(slam_c2ws, axis=0)
-    images = [process_image(image_name) for image_name in imgs]
+    images = [process_image(image_name) for id, image_name in enumerate(imgs) if id < 55] # 防止爆显存
     images = torch.stack(images, dim=0).unsqueeze(0).to(device) # [1, K, 3, 448, 448]
     b, v, _, h, w = images.shape
 
@@ -499,12 +499,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
 
-        with torch.no_grad():
-            if iteration % 200 == 0:
-                image_write = image.permute(1,2,0).detach().cpu().numpy()
-                image_write = (image_write * 255).astype("uint8")
-                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+        # with torch.no_grad():
+        #     if iteration % 200 == 0:
+        #         image_write = image.permute(1,2,0).detach().cpu().numpy()
+        #         image_write = (image_write * 255).astype("uint8")
+        #         os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+        #         cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
                 
         
         
@@ -528,13 +528,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.close()
 
             # Log and save
-            ########## TODO 是否要删除test视角渲染？
             iter_time = iter_start.elapsed_time(iter_end)
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
-            ##########
                 
             #  检查时间计数器，30秒和60秒时保存结果
             elapsed_time = time.time() - start_time
@@ -549,8 +547,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
-                # 到60秒后退出训练
-                sys.exit(0)
+                break  # 60秒后结束训练
+            elif iteration == opt.iterations:
+                print(f"\n[ITER {iteration}] Saving Gaussians at {elapsed_time:.2f} seconds")
+                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, elapsed_time, log_file)
+                scene.save(iteration)
 
             # optim_start.record()
 
@@ -654,6 +655,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     with open(os.path.join(scene.model_path, "TRAIN_INFO"), "w+") as f:
         # f.write("Training Time: {:.2f} seconds, {:.2f} minutes\n".format(total_time, total_time / 60.))
         f.write("GS Number: {}\n".format(gaussians.get_scaling.shape[0]))
+    
+    # 保存优化后的相机位姿    
+    train_cams_list = scene.getTrainCameras()
+    train_cams_json = []
+    for id, cam in enumerate(train_cams_list):
+        train_cams_json.append(camera_to_JSON_after_optimization(id, cam))
+    with open(os.path.join(scene.model_path, "cameras_optimized.json"), "w") as f:
+        json.dump(train_cams_json, f, indent=4)
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
@@ -691,6 +700,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                               {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
         (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
         for config in validation_configs:
+            # 跳过test视角评估
+            if config['name'] == 'test':
+                continue
             if config['cameras'] and len(config['cameras']) > 0:
                 l1_test = 0.0
                 psnr_test = 0.0
@@ -727,9 +739,9 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_scalar('total_points', scene.gaussians.get_scaling.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None):
+def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time, log_file=None):
     torch.cuda.empty_cache()
-    config = {'name': 'test', 'cameras' : scene.getTestCameras()}
+    config = {'name': 'train', 'cameras' : scene.getTrainCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
     if config['cameras'] and len(config['cameras']) > 0:
         l1_test = 0.0
@@ -754,23 +766,22 @@ def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, tim
             ssim_test += ssim(image, gt_image).mean().double()
             image_write = image.permute(1,2,0).detach().cpu().numpy()
             image_write = (image_write * 255).astype("uint8")
-            # os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-            # cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_{}_iter{:06d}.png".format(config['name'], viewpoint.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+            if time != 30:
+                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "{}_{}_iter{:06d}.png".format(config['name'], viewpoint.image_name, iteration)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
         
         psnr_test /= len(config['cameras'])
         l1_test /= len(config['cameras'])
         lpips_test /= len(config['cameras'])
         ssim_test /= len(config['cameras'])
-        print("\n[ITER {}] Evaluating {}sec: L1 {} PSNR {} LPIPS {} SSIM {}".format(iteration, time, l1_test, psnr_test, lpips_test, ssim_test))
+        print("\n[ITER {}] Evaluating {:.2f}sec: L1 {} PSNR {} LPIPS {} SSIM {}".format(iteration, time, l1_test, psnr_test, lpips_test, ssim_test))
         
         # 记录到文件
         if log_file is not None:
             with open(log_file, 'a', newline='') as csvfile:
                 log_writer = csv.writer(csvfile)
-                if time == 30:
-                    log_writer.writerow([scene.model_path.split('/')[-3], 30, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
-                elif time == 60:
-                    log_writer.writerow([scene.model_path.split('/')[-3], 60, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
+                if time != 30:
+                    log_writer.writerow([scene.model_path.split('/')[-3], time, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
             
     torch.cuda.empty_cache()
     
@@ -795,7 +806,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--log_file", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
-    args.save_iterations.append(args.iterations)
+    # args.save_iterations.append(args.iterations)
     
     print("Optimizing " + args.model_path)
 

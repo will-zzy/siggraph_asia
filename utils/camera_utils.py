@@ -97,6 +97,23 @@ def camera_to_JSON(id, camera):
     }
     return camera_entry
 
+def camera_to_JSON_after_optimization(id, camera):
+    W2C = camera.W2C.cpu().numpy().transpose()
+    pos = W2C[:3, 3]
+    rot = W2C[:3, :3]
+    serializable_array_2d = [x.tolist() for x in rot]
+    camera_entry = {
+        'id' : id,
+        'img_name' : camera.image_name,
+        'width' : camera.image_width,
+        'height' : camera.image_height,
+        'position': pos.tolist(),
+        'rotation': serializable_array_2d,
+        'fy' : fov2focal(camera.FoVy, camera.image_height),
+        'fx' : fov2focal(camera.FoVx, camera.image_width)
+    }
+    return camera_entry
+
 
 def SO3_exp(theta):
     device = theta.device

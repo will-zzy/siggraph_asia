@@ -8,6 +8,7 @@ tensorboard_3d
 screenshots
 __pycache__
 data
+align_outputs
 tiny-cuda-nn
 # weight
 metric_depth_vit_giant2_800k.pth
