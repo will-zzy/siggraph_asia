@@ -157,8 +157,29 @@ def SE3_exp(tau):
     T[:3, :3] = R
     T[:3, 3] = t
     return T
-def update_pose(camera, converged_threshold=1e-4):
-    tau = torch.cat([camera.cam_trans_delta, camera.cam_rot_delta], axis=0)
+# def update_pose(camera, , , converged_threshold=1e-4):
+#     tau = torch.cat([camera.cam_trans_delta, camera.cam_rot_delta], axis=0)
+
+#     T_w2c = torch.eye(4, device=tau.device)
+#     R_pose = camera.R # 注意camera里的R是W2C.R的转置
+#     T_w2c[0:3, 0:3] = R_pose.T
+#     T_w2c[0:3, 3] = camera.T
+
+#     new_w2c = SE3_exp(tau) @ T_w2c
+
+#     new_R = new_w2c[0:3, 0:3]
+#     new_T = new_w2c[0:3, 3]
+
+#     converged = tau.norm() < converged_threshold
+#     camera.update_RT(new_R.T, new_T) # 记得转回去
+#     camera.cam_rot_delta.data.fill_(0)
+#     camera.cam_trans_delta.data.fill_(0)
+#     camera.update_W2C = False
+#     camera.update_W2I = False
+#     camera.update_center = False
+#     return converged
+def update_pose(camera, cam_trans_delta, cam_rot_delta, global_transform, update_global, converged_threshold=1e-4):
+    tau = torch.cat([cam_trans_delta, cam_rot_delta], dim=0)
 
     T_w2c = torch.eye(4, device=tau.device)
     R_pose = camera.R # 注意camera里的R是W2C.R的转置
@@ -166,15 +187,36 @@ def update_pose(camera, converged_threshold=1e-4):
     T_w2c[0:3, 3] = camera.T
 
     new_w2c = SE3_exp(tau) @ T_w2c
-
+    if update_global:
+        new_global_transform = SE3_exp(tau) @ global_transform # global transform左乘新来的相机的W2C
+    else:
+        new_global_transform = global_transform
     new_R = new_w2c[0:3, 0:3]
     new_T = new_w2c[0:3, 3]
 
     converged = tau.norm() < converged_threshold
+    
+    # cam_rot_delta.data.fill_(0)
+    # cam_trans_delta.data.fill_(0)
     camera.update_RT(new_R.T, new_T) # 记得转回去
-    camera.cam_rot_delta.data.fill_(0)
-    camera.cam_trans_delta.data.fill_(0)
     camera.update_W2C = False
     camera.update_W2I = False
     camera.update_center = False
-    return converged
+    return converged, new_global_transform
+
+from copy import deepcopy
+def update_pose_by_global(camera, global_transform):
+    new_camera = deepcopy(camera)
+    T_w2c = torch.eye(4, device=global_transform.device)
+    R_pose = new_camera.R # 注意camera里的R是W2C.R的转置
+    T_w2c[0:3, 0:3] = R_pose.T
+    T_w2c[0:3, 3] = new_camera.T
+    
+    new_w2c = global_transform @ T_w2c
+    new_R = new_w2c[0:3, 0:3]
+    new_T = new_w2c[0:3, 3]
+    new_camera.update_RT(new_R.T, new_T) # 记得转回去
+    new_camera.update_W2C = False
+    new_camera.update_W2I = False
+    new_camera.update_center = False
+    return new_camera
