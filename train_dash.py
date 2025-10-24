@@ -571,6 +571,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
+                
                 sys.exit(0)
 
             # optim_start.record()
@@ -677,12 +678,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     _, global_transform = update_pose(view, cam_trans_delta, cam_rot_delta, global_transform, update_global)
                     update_global=False
                     # update_pose(view)
-                
+                with open(os.path.join(scene.model_path, "global_transform.txt"), "w+") as f:
+                    for row in global_transform.cpu().numpy():
+                        f.write(" ".join([f"{x:.8f}" for x in row]) + "\n")
                 cam_rot_delta.data.fill_(0)
                 cam_trans_delta.data.fill_(0)
     with open(os.path.join(scene.model_path, "TRAIN_INFO"), "w+") as f:
         # f.write("Training Time: {:.2f} seconds, {:.2f} minutes\n".format(total_time, total_time / 60.))
         f.write("GS Number: {}\n".format(gaussians.get_scaling.shape[0]))
+        
+    
+    
 
 def prepare_output_and_logger(args):    
     if not args.model_path:

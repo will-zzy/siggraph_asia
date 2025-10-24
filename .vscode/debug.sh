@@ -1,8 +1,8 @@
 
 
 # case=Truck
-# case=1747834320424
-case=1748165890960
+case=1747834320424
+# case=1748165890960
 root_dir=/home/zzy/data/sa/$case
 # name=sig_GS_R2_speedy_forward
 name=sig_GS_useAnySplatAnchor_global_transform_debug
@@ -11,7 +11,7 @@ model_dir=$root_dir/exp/$name
 voxel_size=0.001
 appearance_dim=16
 update_init_factor=16
-VGGY_PATH=/home/zzy/lib/siggraph_asia/vggt
+VGGT_PATH=/home/zzy/lib/siggraph_asia/vggt
 densify_grad_threshold=0.0005
 
 
@@ -51,7 +51,7 @@ preprocess $root_dir $case
 
 #  --eval
 rm -r $model_dir/test
-ANY_SPLAT_VGGT_WEIGHTS=$VGGY_PATH python \
+ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH python \
     train_dash.py -s \
     $root_dir -m $model_dir -r 2 \
     --resolution_mode const \

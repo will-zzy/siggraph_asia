@@ -1,5 +1,6 @@
 ## 0.install && quickly start
 
+**由于赛题有不明确之处，因此我们准备了两套代码以应对不同的测评方法，两套代码均使用同一套环境，具体区别在1.5位姿优化中介绍**
 ### 0.1.install
 
 ```bash
@@ -12,7 +13,7 @@ pip install -r requirements.txt
 
 同时需要下载[AnySplat的权重与配置文件](https://huggingface.co/lhjiang/anysplat/tree/main)到`siggraph_asia/anySplat/ckpt`下
 
-以及[VGGT的权重与配置文件](https://huggingface.co/facebook/VGGT-1B/tree/main)到任意目录下，并在`.vscode/run_all.sh`中，将`VGGY_PATH`的路径改为该下载目录
+以及[VGGT的权重与配置文件](https://huggingface.co/facebook/VGGT-1B/tree/main)到任意目录下，并在`.vscode/run_all.sh`中，将`VGGT_PATH`的路径改为该下载目录
 
 
 
@@ -100,7 +101,7 @@ Taming-GS提出使用per-Gaussian而不是per-pixel的反向传播策略。具�
 
 图四：scaffold-GS（左）和vanilla-GS（右）对比图
 
-
+**注意，由于我们使用了scaffold-GS表达，因此point_cloud.ply是scaffold-GS的点云(神经点云)，同时神经点云的rgb是随视角相关的，不能直接转换为高斯点云，因此请使用我们的渲染器渲染，我们提供了一个简易的渲染样例`transformScaffold2Gaussian.py`，该文件由`.vscode/eval_global.sh`运行。**
 
 ### 1.4.Feedforward Initial Points
 
@@ -121,6 +122,13 @@ Taming-GS提出使用per-Gaussian而不是per-pixel的反向传播策略。具�
 <img src="assets/w/image-20251021171815382.png" alt="image-20251021171815382" style="zoom:40%;" />
 
 图六：使用位姿优化（右）与不使用位姿优化（左）对比图
+
+**由于我们进行了位姿优化，而测试视角还是未经优化过的位姿，如何将测试视角对齐到优化后坐标系下是一个难点，因此我们准备了两套方案。**<br>
+
+**第一套，每个相机独自维护一个可学习的偏移量，这套方案PSNR较高，但无法评测官方给定视角下的图片（尽管渲染质量更高）。**<br>
+
+**第二套，仅维护一个global的偏移量（4x4矩阵），当使用和官方数据集初始位姿同一坐标系下的新视角渲染时，将这个4x4矩阵左乘新视角的W2C，具体可见代码我们第二份代码siggraph_asia中`utils/camera_utils.py`的`update_pose_by_global`函数，global transform可在`model_path`下的`global_transform.txt`中读取。**
+
 
 **由于没有测试集的准确位姿，我们仅评估训练集的PSNR**
 
