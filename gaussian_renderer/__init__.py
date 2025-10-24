@@ -431,8 +431,8 @@ def render(viewpoint_camera,
         "viewspace_points": screenspace_points,
         "visibility_filter" : (radii > 0),
         "radii": radii,
-        "selection_mask": mask,
-        "neural_opacity": neural_opacity,
+        "selection_mask": mask if is_training else None,
+        "neural_opacity": neural_opacity if is_training else None,
         "scaling": scaling,
         "depth" : depth_image
         }

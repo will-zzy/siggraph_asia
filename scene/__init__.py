@@ -22,7 +22,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, pipe, anchor_xyz, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, pipe, anchor_xyz=None, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -89,9 +89,10 @@ class Scene:
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter)))
         elif not pipe.useFF:
+            if anchor_xyz is not None:
             # self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
             # self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent) # embedding在gaussian model中声明
-            self.gaussians.create_from_pcd(anchor_xyz._xyz, self.cameras_extent) # embedding在gaussian model中声明
+                self.gaussians.create_from_pcd(anchor_xyz._xyz, self.cameras_extent) # embedding在gaussian model中声明
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
