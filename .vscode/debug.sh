@@ -12,29 +12,34 @@ voxel_size=0.001
 appearance_dim=16
 update_init_factor=16
 VGGY_PATH=/home/zzy/lib/siggraph_asia/vggt
-densify_grad_threshold=0.001
+densify_grad_threshold=0.0002
 
 
 
 feat_dim=64
 n_offsets=10 # 每个anchor的子高斯数
 
-densify_until_iter=5000
-update_from=100
+densify_until_iter=4000
+update_from=500
 densify_from_iter=$update_from
 update_until=$densify_until_iter
-densification_interval=300
-FF_downsample=16 # 对anySplat的点下采样倍数，用于充当anchor
+densification_interval=100
+FF_downsample=1024 # 对anySplat的点下采样倍数，用于充当anchor
 
+
+MLP_OPACITY_LR_INIT=0.002 # 0.002
+MLP_COV_LR_INIT=0.004 # 0.004
+MLP_COLOR_LR_INIT=0.014 # 0.008
+FEATURE_LR_INIT=0.0075 # 0.0075
+OFFSET_LR_INIT=0.005 # 0.01
 
 #  --eval
 rm -r $model_dir/test
 ANY_SPLAT_VGGT_WEIGHTS=$VGGY_PATH python \
-    -m debugpy --wait-for-client --listen localhost:5684 \
     train_dash.py -s \
     $root_dir -m $model_dir -r 2 \
     --resolution_mode const \
-    --densify_until_iter 15000 \
+    --densify_until_iter $densify_until_iter \
     --densify_mode freq \
     --disable_viewer \
     --antialiasing \
@@ -50,6 +55,12 @@ ANY_SPLAT_VGGT_WEIGHTS=$VGGY_PATH python \
     --update_until $update_until \
     --n_offsets $n_offsets \
     --FF_downsample $FF_downsample \
-    --feat_dim $feat_dim
+    --feat_dim $feat_dim \
+    --mlp_opacity_lr_init $MLP_OPACITY_LR_INIT \
+    --mlp_cov_lr_init $MLP_COV_LR_INIT \
+    --mlp_color_lr_init $MLP_COLOR_LR_INIT \
+    --feature_lr $FEATURE_LR_INIT \
+    --offset_lr_init $OFFSET_LR_INIT
     # --useFF
     # --use_feat_bank true\
+    # -m debugpy --wait-for-client --listen localhost:5685 \

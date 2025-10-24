@@ -215,9 +215,12 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
         depths_folder=os.path.join(path, depths) if depths != "" else "", test_cam_names_list=test_cam_names_list)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    train_cam_infos = [c for c in cam_infos if train_test_exp or not c.is_test]
+    # train_cam_infos = [c for c in cam_infos if train_test_exp or not c.is_test]
+    train_cam_infos = [c for c in cam_infos]
     # test_cam_infos = [c for c in cam_infos if c.is_test]
-    test_cam_infos = [c for id, c in enumerate(cam_infos) if id % llffhold == 0]
+    test_cam_infos = []
+    # test_cam_infos = [c for id, c in enumerate(cam_infos) if (id+2) % 1 == 0]
+    # test_cam_infos=[c for c in cam_infos]
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 

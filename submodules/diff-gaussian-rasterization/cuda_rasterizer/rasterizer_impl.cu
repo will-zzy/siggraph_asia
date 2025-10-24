@@ -191,51 +191,6 @@ __global__ void checkFrustum(int P,
 // }
 
 
-template<uint32_t PATCH_WIDTH, uint32_t PATCH_HEIGHT>
-__device__ inline float max_contrib_power_rect_gaussian_float(
-	const float4 co, 
-	const float2 mean, 
-	const glm::vec2 rect_min,
-	const glm::vec2 rect_max,
-	glm::vec2& max_pos)
-{
-	const float x_min_diff = rect_min.x - mean.x;
-	const float x_left = x_min_diff > 0.0f;
-	// const float x_left = mean.x < rect_min.x;
-	const float not_in_x_range = x_left + (mean.x > rect_max.x);
-
-	const float y_min_diff = rect_min.y - mean.y;
-	const float y_above =  y_min_diff > 0.0f;
-	// const float y_above = mean.y < rect_min.y;
-	const float not_in_y_range = y_above + (mean.y > rect_max.y);
-
-	max_pos = {mean.x, mean.y};
-	float max_contrib_power = 0.0f;
-
-	if ((not_in_y_range + not_in_x_range) > 0.0f)
-	{
-		const float px = x_left * rect_min.x + (1.0f - x_left) * rect_max.x;
-		const float py = y_above * rect_min.y + (1.0f - y_above) * rect_max.y;
-
-		const float dx = copysign(float(PATCH_WIDTH), x_min_diff);
-		const float dy = copysign(float(PATCH_HEIGHT), y_min_diff);
-
-		const float diffx = mean.x - px;
-		const float diffy = mean.y - py;
-
-		const float rcp_dxdxcox = __frcp_rn(PATCH_WIDTH * PATCH_WIDTH * co.x); // = 1.0 / (dx*dx*co.x)
-		const float rcp_dydycoz = __frcp_rn(PATCH_HEIGHT * PATCH_HEIGHT * co.z); // = 1.0 / (dy*dy*co.z)
-
-		const float tx = not_in_y_range * __saturatef((dx * co.x * diffx + dx * co.y * diffy) * rcp_dxdxcox);
-		const float ty = not_in_x_range * __saturatef((dy * co.y * diffx + dy * co.z * diffy) * rcp_dydycoz);
-		max_pos = {px + tx * dx, py + ty * dy};
-		
-		const float2 max_pos_diff = {mean.x - max_pos.x, mean.y - max_pos.y};
-		max_contrib_power = evaluate_opacity_factor(max_pos_diff.x, max_pos_diff.y, co);
-	}
-
-	return max_contrib_power;
-}
 
 __forceinline__ __device__ void getRect_stopThePop(const float2 p, int max_radius, uint2& rect_min, uint2& rect_max, dim3 grid)
 {

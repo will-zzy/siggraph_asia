@@ -905,10 +905,7 @@ class GaussianModel:
                 self._offset = optimizable_tensors["offset"]
                 self._opacity = optimizable_tensors["opacity"]
                 
-    def anchor_growing_topK(self, grads, threshold, offset_mask, n_densify):
-        init_length = self.get_anchor.shape[0]*self.n_offsets
-        
-        
+
         
         
         
@@ -976,81 +973,7 @@ class GaussianModel:
         
         self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda")
 
-    # def adjust_anchor(self, check_interval=100, success_threshold=0.8, grad_threshold=0.0002, min_opacity=0.005, densify_rate=0.0):
-    #     # # adding anchors
-    #     cur_n_gaussian = self.get_anchor.shape[0]
-    #     prune_mask = (self.opacity_accum < min_opacity*self.anchor_demon).squeeze(dim=1)
-    #     anchors_mask = (self.anchor_demon > check_interval * success_threshold).squeeze(dim=1) # [N, 1]
-    #     prune_mask = torch.logical_and(prune_mask, anchors_mask) # [N] 
-        
-    #     if prune_mask.shape[0]>0:
-    #         self.prune_anchor(prune_mask)
-            
-        
-    #     n_densify = min(int(cur_n_gaussian * (1 + densify_rate) - self.get_xyz.shape[0]), self.get_xyz.shape[0])
-    #     grads = self.offset_gradient_accum / self.offset_denom # [N*k, 1]
-    #     grads[grads.isnan()] = 0.0
-    #     grads[grads.isnan()] = 0.0
-    #     grads_norm = torch.norm(grads, dim=-1)
-    #     offset_mask = (self.offset_denom > check_interval * success_threshold * 0.5).squeeze(dim=1) # 被观测到足够多的splat才更新？不应该吧
-    #     offset_mask = torch.ones_like(offset_mask)
-    #     self.anchor_growing_topK(grads_norm, grad_threshold, offset_mask, n_densify)
-        
-        
-        
-    #     # grads = self.offset_gradient_accum / self.offset_denom # [N*k, 1]
-    #     # grads[grads.isnan()] = 0.0
-    #     # grads_norm = torch.norm(grads, dim=-1)
-    #     # offset_mask = (self.offset_denom > check_interval * success_threshold * 0.5).squeeze(dim=1)
-        
-    #     # self.anchor_growing(grads_norm, grad_threshold, offset_mask)
-        
-    #     # update offset_denom
-    #     self.offset_denom[offset_mask] = 0
-    #     padding_offset_demon = torch.zeros([self.get_anchor.shape[0]*self.n_offsets - self.offset_denom.shape[0], 1],
-    #                                        dtype=torch.int32, 
-    #                                        device=self.offset_denom.device)
-    #     self.offset_denom = torch.cat([self.offset_denom, padding_offset_demon], dim=0)
-
-    #     self.offset_gradient_accum[offset_mask] = 0
-    #     padding_offset_gradient_accum = torch.zeros([self.get_anchor.shape[0]*self.n_offsets - self.offset_gradient_accum.shape[0], 1],
-    #                                        dtype=torch.int32, 
-    #                                        device=self.offset_gradient_accum.device)
-    #     self.offset_gradient_accum = torch.cat([self.offset_gradient_accum, padding_offset_gradient_accum], dim=0)
-        
-    #     # # prune anchors
-    #     prune_mask = (self.opacity_accum < min_opacity*self.anchor_demon).squeeze(dim=1)
-    #     anchors_mask = (self.anchor_demon > check_interval * success_threshold).squeeze(dim=1) # [N, 1]
-    #     prune_mask = torch.logical_and(prune_mask, anchors_mask) # [N] 
-        
-    #     # update offset_denom
-    #     offset_denom = self.offset_denom.view([-1, self.n_offsets])[~prune_mask]
-    #     offset_denom = offset_denom.view([-1, 1])
-    #     del self.offset_denom
-    #     self.offset_denom = offset_denom
-
-    #     offset_gradient_accum = self.offset_gradient_accum.view([-1, self.n_offsets])[~prune_mask]
-    #     offset_gradient_accum = offset_gradient_accum.view([-1, 1])
-    #     del self.offset_gradient_accum
-    #     self.offset_gradient_accum = offset_gradient_accum
-        
-    #     # update opacity accum 
-    #     if anchors_mask.sum()>0:
-    #         self.opacity_accum[anchors_mask] = torch.zeros([anchors_mask.sum(), 1], device='cuda').float()
-    #         self.anchor_demon[anchors_mask] = torch.zeros([anchors_mask.sum(), 1], device='cuda').float()
-        
-    #     temp_opacity_accum = self.opacity_accum[~prune_mask]
-    #     del self.opacity_accum
-    #     self.opacity_accum = temp_opacity_accum
-
-    #     temp_anchor_demon = self.anchor_demon[~prune_mask]
-    #     del self.anchor_demon
-    #     self.anchor_demon = temp_anchor_demon
-
-    #     if prune_mask.shape[0]>0:
-    #         self.prune_anchor(prune_mask)
-        
-    #     self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda")
+    
     def save_mlp_checkpoints(self, path, mode = 'split'):# split or unite
         mkdir_p(os.path.dirname(path))
         if mode == 'split':
