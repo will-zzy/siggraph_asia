@@ -1,3 +1,34 @@
+## 0.install && quickly start
+
+### 0.1.install
+
+```bash
+conda create -n 3dv_gs python=3.10
+conda activate 3dv_gs
+pip install torch=xxx torchvision=xxx # 请根据自己的cuda版本选择
+
+pip install -r requirements.txt
+```
+
+同时需要下载[AnySplat的权重与配置文件](https://huggingface.co/lhjiang/anysplat/tree/main)到`siggraph_asia/anySplat/ckpt`下
+
+以及[VGGT的权重与配置文件](https://huggingface.co/facebook/VGGT-1B/tree/main)到任意目录下，并在`.vscode/run_all.sh`中，将`VGGY_PATH`的路径改为该下载目录
+
+
+
+### 0.2.quicikly start
+
+将`run_all.sh`中的
+
+```
+chmod +x .vscode/run_all.sh
+./.vscode/run_all.sh
+```
+
+
+
+
+
 
 
 ## 1.Methods
@@ -7,6 +38,10 @@
 在原版3DGS的方法中，我们借鉴了speedy-splat的解析前向法：
 
 <img src="assets/w/image-20251021113719161.png" alt="image-20251021113719161" style="zoom:67%;" />
+
+​                  图一：Tighter BBox示意图
+
+
 
 给定2D椭圆参数$Cov2D=\{a,b,c\}$，以及椭圆的质心$\mu$和椭球的不透明度$o$，椭圆参数化方程可描述为
 $$
@@ -26,11 +61,17 @@ $$
 
 Taming-GS提出使用per-Gaussian而不是per-pixel的反向传播策略。具体来说，传统的3DGS在反向传播时每个线程负责一个像素，并顺序遍历叠在该像素上的所有高斯，并对梯度进行原子加法，这在不同线程中会引起严重的竞态。在一般场景中，一个tile上往往叠加了几百个splats，这也会使得并行数（256）小于顺序遍历数。而Taming-GS提出每个线程负责一个splat，计算完当前tile所有像素对于该splat的梯度贡献后再进行原子加法，大大减小了线程竞态；
 
-<img src="assets/w/image-20251021164509192.png" alt="image-20251021164509192" style="zoom:50%;" />		<img src="assets/w/image-20251021164524524.png" alt="image-20251021164524524" style="zoom:50%;" /> 
+<img src="assets/w/image-20251021164509192.png" alt="image-20251021164509192" style="zoom:50%;" />    <img src="assets/w/image-20251021164524524.png" alt="image-20251021164524524" style="zoom:50%;" /> 
+
+图二：per-gaussian 反向传播示意图
+
+
 
 我们在前向渲染时，**每个像素**每渲染32个splats记录一次反向传播时所需的透射率`T`和所blending的颜色`C`，从而在反向传播时，每个warp可以独立地对自己组内的splat递归更新梯度，如图3（右）所示，不同颜色表示不同的warp，每个warp根据前向时所记录的`T`和`C`在warp内遍历当前tile所有像素，递归更新每个splat的梯度
 
-<img src="assets/w/image-20251021165143361.png" alt="image-20251021165143361" style="zoom:50%;" />						<img src="assets/w/image-20251021165116057.png" alt="image-20251021165116057" style="zoom:50%;" />
+<img src="assets/w/image-20251021165143361.png" alt="image-20251021165143361" style="zoom:50%;" />                <img src="assets/w/image-20251021165116057.png" alt="image-20251021165116057" style="zoom:50%;" />
+
+图三：per-gaussian 反向传播示意图
 
 
 
@@ -43,89 +84,51 @@ Taming-GS提出使用per-Gaussian而不是per-pixel的反向传播策略。具�
 | w/ Backward & Forward                |   180    |  **159**  |   **173**    |   **137**   |  **171**   |
 | w/ Backward & Forward & Load Balance | **176**  |    163    |     177      |     141     |    171     |
 
-1.3.Representation->Neural Gaussians
+### 1.3.Representation->Neural Gaussians
 
 应用了1.1和1.2中的加速方法之后，我们发现在4090上仍然没法在1min中内完成收敛，哪怕提前截止（20000轮），时间也在1min开外，因此我们打算更改表达方式进行加速。
 
-我们分析，由于在原本的表达中，每个splat为一个单独的叶子节点，这使得每个splat并不能共享优化信息，使得优化效率低下，
-
-
+我们分析，由于在原本的表达中，每个splat为一个单独的叶子节点，这使得每个splat并不能共享优化信息，使得优化效率低下。为此我们引入了`Scaffold-GS`作为表达，使用`anchor`的特征来inference `splats`的属性，这大大减少了优化参数数量，并使得收敛更快。
 
 <img src="assets/w/image-20251021171748579.png" alt="image-20251021171748579" style="zoom:50%;" />
 
+图四：scaffold-GS（左）和vanilla-GS（右）对比图
 
 
 
+### 1.4.Feedforward Initial Points
 
-1.4.Densification of Init points
+我们使用了AnySplat的输出点位置，降采样后作为初始的`anchor`位置，
 
-<img src="assets/w/image-20251021171804904.png" alt="image-20251021171804904" style="zoom:50%;" />
+<img src="assets/w/image-20251024170415411.png" alt="image-20251024170415411" style="zoom:50%;" />
+
+图五：稠密化初始点（左）与不稠密化（右）对比图
+
+**需要注意一点，anySplat和VGGT并不是必须的，使用轻量的深度估计模型增加初始点数量也是可行的**
+
+### 1.5.Pose Optimization
+
+由于数据集的位姿十分不准确，我们进行了位姿优化
 
 
-
-
-
-1.5.Pose Optimization
 
 <img src="assets/w/image-20251021171815382.png" alt="image-20251021171815382" style="zoom:50%;" />
 
+图六：使用位姿优化（右）与不使用位姿优化（左）对比图
+
+**由于没有测试集的准确位姿，我们仅评估训练集的PSNR**
+
+## 2.测试结果
 
 
-2.测试结果
 
 
 
-## Metric3D参数消融汇总
 
-下面所有实验都在场景`1748153841908`下的结果
 
-| 参数组 | 设置 | 30s L1 | 30s PSNR | 30s LPIPS | 30s SSIM | 60s L1 | 60s PSNR | 60s LPIPS | 60s SSIM |
-|--------|------|--------|----------|-----------|----------|--------|----------|-----------|----------|
-| **Baseline** | k-views=8, samples=3000, strategy=bg | 0.0480 | 22.60 | 0.255 | 0.777 | 0.0491 | 22.30 | 0.247 | 0.766 |
 
-#### k-views 消融实验 (samples-per-view=3000, strategy=bg)
-| k-views | 30s L1 | 30s PSNR | 30s LPIPS | 30s SSIM | 60s L1 | 60s PSNR | 60s LPIPS | 60s SSIM |
-|---------|--------|----------|-----------|----------|--------|----------|-----------|----------|
-| 6 | 0.0497 | 22.41 | 0.252 | 0.774 | 0.0494 | 22.26 | 0.241 | 0.764 |
-| **8** | **0.0480** | **22.60** | **0.255** | **0.777** | **0.0491** | **22.30** | **0.247** | **0.766** |
-| 10 | 0.0496 | 22.51 | 0.253 | 0.775 | 0.0494 | 22.27 | 0.242 | 0.767 |
-| 12 | 0.0503 | 22.46 | 0.252 | 0.776 | 0.0500 | 22.18 | 0.244 | 0.764 |
 
-#### samples-per-view 消融实验 (k-views=8, strategy=bg)
-| samples-per-view | 30s L1 | 30s PSNR | 30s LPIPS | 30s SSIM | 60s L1 | 60s PSNR | 60s LPIPS | 60s SSIM |
-|------------------|--------|----------|-----------|----------|--------|----------|-----------|----------|
-| 2000 | 0.0478 | 22.68 | 0.255 | 0.778 | 0.0503 | 22.17 | 0.244 | 0.766 |
-| **3000** | **0.0480** | **22.60** | **0.255** | **0.777** | **0.0491** | **22.30** | **0.247** | **0.766** |
-| 4000 | 0.0492 | 22.42 | 0.258 | 0.774 | 0.0508 | 22.06 | 0.251 | 0.762 |
 
-#### strategy 消融实验 (k-views=8, samples-per-view=3000)
-| strategy | 30s L1 | 30s PSNR | 30s LPIPS | 30s SSIM | 60s L1 | 60s PSNR | 60s LPIPS | 60s SSIM |
-|----------|--------|----------|-----------|----------|--------|----------|-----------|----------|
-| uniform | 0.0466 | 22.69 | 0.237 | 0.779 | 0.0467 | 22.53 | 0.234 | 0.771 |
-| grid | 0.0461 | 22.73 | 0.239 | 0.778 | 0.0476 | 22.58 | 0.230 | 0.773 |
-| random | 0.0439 | 23.06 | 0.235 | 0.785 | 0.0464 | 22.63 | 0.228 | 0.775 |
-| depth_uniform | 0.0467 | 22.73 | 0.235 | 0.780 | 0.0470 | 22.51 | 0.229 | 0.772 |
-| **bg** | **0.0480** | **22.60** | **0.255** | **0.777** | **0.0491** | **22.30** | **0.247** | **0.766** |
 
-### 实验分析
 
-1. **k-views 参数分析**：
-   - k-views=8的baseline设置在两个时间点都取得了相对平衡的性能
-   - k-views=6和k-views=10的性能与baseline接近，但k-views=12的性能略有下降
 
-2. **samples-per-view 参数分析**：
-   - samples-per-view=2000在30秒时取得了最好的PSNR (22.68)，但在60秒时性能下降明显
-   - samples-per-view=3000的baseline设置在两个时间点都保持了稳定的性能
-   - samples-per-view=4000的性能相对较差，尤其是在60秒时PSNR下降到22.06
-
-3. **strategy 参数分析**：
-   - random策略在30秒时取得了最好的性能 (PSNR 23.06)，但在60秒时有所下降
-   - grid和depth_uniform策略在两个时间点都取得了不错的性能，指标上优于bg
-   - uniform策略在30秒到60秒的PSNR下降最少，
-
-### 结论
-
-从消融实验结果可以看出：
-- baseline设置 (k-views=8, samples-per-view=3000, strategy=bg) 在整体上取得了较为平衡的性能表现
-- random策略在短期内取得了最好的性能，但长期稳定性不如其他策略
-- grid和depth_uniform策略在两个时间点都表现稳定，是**潜在的更好选择**

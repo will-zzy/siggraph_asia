@@ -39,7 +39,7 @@ CASES=(
 # 基础路径
 ROOT_BASE="/home/jyxc/projects/siggraph_asia/data"
 NAME="sig_GS_R2_speedy_forward_LB_w_scaffold_withPoseOptimization_24000AddInit"
-
+VGGY_PATH=/home/zzy/lib/siggraph_asia/vggt
 # 超参数设置
 VOXEL_SIZE=0.001
 APPEARANCE_DIM=16
@@ -96,7 +96,7 @@ for case in "${CASES[@]}"; do
         rm -r "$model_dir/test"
     fi
 
-    python \
+    ANY_SPLAT_VGGT_WEIGHTS=$VGGY_PATH python \
         train_dash.py -s "$root_dir" -m "$model_dir" -r $RESOLUTION \
         --densify_mode freq \
         --resolution_mode const \

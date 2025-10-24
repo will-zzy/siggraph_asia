@@ -13,7 +13,7 @@ densify_until_iter=5000
 update_from=500
 update_until=$densify_until_iter
 feat_dim=64
-densify_grad_threshold=0.001
+densify_grad_threshold=0.0007
 resolution=2
 
 

@@ -142,7 +142,7 @@ def anySplat(dataset, opt, pipe):
         imgs.append(os.path.join(images_dir, img_name))
         slam_c2ws.append(cam.pose[None])
     slam_c2ws = np.concatenate(slam_c2ws, axis=0)
-    images = [process_image(image_name) for image_name in imgs]
+    images = [process_image(image_name) for id, image_name in enumerate(imgs) if id < 60]
     images = torch.stack(images, dim=0).unsqueeze(0).to(device) # [1, K, 3, 448, 448]
     b, v, _, h, w = images.shape
 
@@ -211,7 +211,7 @@ def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=No
     del xyz
     
     scaling = gaussians._scaling
-    scaling = scaling + torch.log(scale * 4)
+    scaling = scaling + torch.log(scale * 2)
     gaussians._scaling.data.copy_(scaling)
     del scaling
     
@@ -499,12 +499,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
 
-        with torch.no_grad():
-            if iteration % 200 == 0:
-                image_write = image.permute(1,2,0).detach().cpu().numpy()
-                image_write = (image_write * 255).astype("uint8")
-                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+        # with torch.no_grad():
+        #     if iteration % 200 == 0:
+        #         image_write = image.permute(1,2,0).detach().cpu().numpy()
+        #         image_write = (image_write * 255).astype("uint8")
+        #         os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+        #         cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
                 
         
         
@@ -544,7 +544,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file)
                 eval_time = time.time() - eval_start_time
                 time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
-            elif eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations:
+            elif (eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
                 eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file)
                 scene.save(iteration)
@@ -564,7 +564,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                     # gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
                     if iteration > opt.update_from and iteration % opt.update_interval == 0:
-                        gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity, scheduler=scheduler)
+                        gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
                     # if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     #     # Apply DashGaussian primitive scheduler to control densification.
@@ -647,7 +647,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     viewpoint_cam.pose_optimizer.zero_grad(set_to_none = True)
             
             
-            if iteration > 1000 and iteration % 400 == 0 and iteration < opt.update_until :
+            if iteration > 500 and iteration % 300 == 0 and iteration < opt.update_until :
                 # update_pose(viewpoint_cam)
                 for view in scene.getTrainCameras():
                     update_pose(view)
@@ -688,7 +688,8 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
     if iteration in testing_iterations:
         torch.cuda.empty_cache()
         validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()}, 
-                              {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
+                              {'name': 'train', 'cameras' : scene.getTrainCameras()})
+                            #   {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(len(scene.getTrainCameras()))]})
         (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
         for config in validation_configs:
             if config['cameras'] and len(config['cameras']) > 0:
@@ -710,10 +711,10 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
                             tb_writer.add_images(config['name'] + "_view_{}/ground_truth".format(viewpoint.image_name), gt_image[None], global_step=iteration)
                     l1_test += l1_loss(image, gt_image).mean().double()
                     psnr_test += psnr(image, gt_image).mean().double()
-                    image_write = image.permute(1,2,0).detach().cpu().numpy()
-                    image_write = (image_write * 255).astype("uint8")
-                    os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-                    cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}_{}.png".format(iteration, config['name'], viewpoint.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+                    # image_write = image.permute(1,2,0).detach().cpu().numpy()
+                    # image_write = (image_write * 255).astype("uint8")
+                    # os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+                    # cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}_{}.png".format(iteration, config['name'], viewpoint.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
                 
                 psnr_test /= len(config['cameras'])
                 l1_test /= len(config['cameras'])          
@@ -729,7 +730,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
         
 def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None):
     torch.cuda.empty_cache()
-    config = {'name': 'test', 'cameras' : scene.getTestCameras()}
+    config = {'name': 'test', 'cameras' : scene.getTrainCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
     if config['cameras'] and len(config['cameras']) > 0:
         l1_test = 0.0
@@ -737,11 +738,14 @@ def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, tim
         lpips_test = 0.0
         ssim_test = 0.0
         for idx, viewpoint in enumerate(config['cameras']):
-            try:
-                voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
-                image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
-            except:
-                image = torch.clamp(renderFunc2(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
+            voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
+            image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+                    
+            # try:
+            #     voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
+            #     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+            # except:
+            #     image = torch.clamp(renderFunc2(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
             gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
