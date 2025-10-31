@@ -45,5 +45,6 @@ einops
 safetensors
 tqdm
 plyfile
+roma
 ./pytorch3d
 
