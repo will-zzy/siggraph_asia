@@ -6,9 +6,11 @@
 ```bash
 conda create -n 3dv_gs python=3.10
 conda activate 3dv_gs
-pip install torch=xxx torchvision=xxx # 请根据自己的cuda版本选择
+pip install https://download.pytorch.org/whl/cu121/torch-2.5.1%2Bcu121-cp310-cp310-linux_x86_64.whl#sha256=92af92c569de5da937dd1afb45ecfdd598ec1254cf2e49e3d698cb24d71aae14
+pip install https://download.pytorch.org/whl/cu121/torchvision-0.20.0%2Bcu121-cp310-cp310-linux_x86_64.whl#sha256=7a1023c04ad2a77e8350a992a025d69e03214230390f2cf2c32b1e8e8beba7e9
+pip install -r requirements.txt -c constraints.txt # 在此处也可以先装适合自己版本的torch和torchvision，并将版本写入constraints.txt，这样就可以去掉requirements中对于torch的依赖
+pip install submodules/diff-gaussian-rasterization submodules/simple-knn submodules/fused-ssim submodules/lanczos-resampling
 
-pip install -r requirements.txt
 ```
 
 同时需要下载[AnySplat的权重与配置文件](https://huggingface.co/lhjiang/anysplat/tree/main)到`siggraph_asia/anySplat/ckpt`下

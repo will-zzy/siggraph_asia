@@ -1,0 +1,2 @@
+torch==2.5.0+cu121
+torchvision==0.20.0+cu121
