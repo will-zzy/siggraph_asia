@@ -6,9 +6,13 @@
 ```bash
 conda create -n 3dv_gs python=3.10
 conda activate 3dv_gs
-pip install -U xformers==0.0.30 --index-url https://download.pytorch.org/whl/cu126 # 请根据本地cuda版本更换url，0.0.30的xformers会自动下载2.7.0-torch的依赖
-pip install torchvision --no-deps # 应该会装成0.24.0
-pip install -r requirements.txt
+pip install -U xformers==0.0.29 --index-url https://download.pytorch.org/whl/cu126 
+# 请根据本地cuda版本更换url，0.0.29的xformers会自动下载2.5.1-torch的依赖
+# 并安装对应版本的torchvision(2.5.1对应0.20.1)，我们建议通过预编译.whl进行安装: https://download.pytorch.org/whl/torchvision/
+wget torchvision-xxxx_by_https://download.pytorch.org/whl/torchvision/
+pip install torchvision-xxxx 
+# 然后pip list查询torch与torchvision版本，将其版本填入constraints.txt
+pip install -r requirements.txt -c constraints.txt
 pip install submodules/diff-gaussian-rasterization submodules/simple-knn submodules/fused-ssim submodules/lanczos-resampling
 
 ```
