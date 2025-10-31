@@ -38,33 +38,6 @@ set -euo pipefail
 
 CASES=(
     1747834320424
-    1748153841908
-    # 1748165890960
-    # 1748242779841
-    # 1748243104741
-    # 1748265156579
-    # 1748411766587
-    # 1748422612463
-    # 1748686118256
-    # 1748689420856
-    # 1748748200211
-    # 1748781144981
-    # 1748833935627
-    # 1749369580718
-    # 1749449291156
-    # 1749606908096
-    # 1749803955124
-    # 1749864076665
-    # 1749972078570
-    # 1749974151642
-    # 1749975239137
-    # 1749977115648
-    # 1750342099701
-    # 1750342304509
-    # 1750343446362
-    # 1750383597053
-    # 1750578027423
-    # 1750824904001
     1750825558261
     1750846199351
     1751090600427
@@ -75,19 +48,23 @@ NAME="sig_GS_R2_speedy_forward_LB_w_scaffold_withPoseOptimization_24000AddInit"
 VGGY_PATH=/home/zzy/engineer/siggraph_asia/vggt
 # 超参数设置
 VOXEL_SIZE=0.001
-APPEARANCE_DIM=16
-N_OFFSETS=4
+APPEARANCE_DIM=32
+N_OFFSETS=10
 UPDATE_INIT_FACTOR=16
-DENSIFY_UNTIL_ITER=5000
+DENSIFY_UNTIL_ITER=4000
 UPDATE_FROM=500
 UPDATE_UNTIL=${DENSIFY_UNTIL_ITER}
 FEAT_DIM=64
-DENSIFY_GRAD_THRESHOLD=0.001
+DENSIFY_GRAD_THRESHOLD=0.0005
 RESOLUTION=2
 MLP_OPACITY_LR_INIT=0.002 # 0.002
 MLP_COV_LR_INIT=0.004 # 0.004
-MLP_COLOR_LR_INIT=0.008 # 0.008
+MLP_COLOR_LR_INIT=0.014 # 0.008
+OFFSET_LR_INIT=0.005 # 0.01
 FEATURE_LR=0.0075 # 0.0075
+
+FF_downsample=128 # 对anySplat的点下采样倍数，用于充当anchor
+densification_interval=300
 
 # 预处理
 preprocess(){
@@ -143,6 +120,8 @@ for case in "${CASES[@]}"; do
         --n_offsets $N_OFFSETS \
         --densify_until_iter $DENSIFY_UNTIL_ITER \
         --densify_grad_threshold $DENSIFY_GRAD_THRESHOLD \
+        --densification_interval $densification_interval \
+        --FF_downsample $FF_downsample \
         --feat_dim $FEAT_DIM \
         --update_from $UPDATE_FROM \
         --update_until $UPDATE_UNTIL \
@@ -150,7 +129,8 @@ for case in "${CASES[@]}"; do
         --mlp_cov_lr_init $MLP_COV_LR_INIT \
         --mlp_color_lr_init $MLP_COLOR_LR_INIT \
         --feature_lr $FEATURE_LR \
-        --log_file "$LOG_FILE"
+        --log_file "$LOG_FILE" \
+        --offset_lr_init $OFFSET_LR_INIT
 done
 
 echo ""
