@@ -22,17 +22,27 @@ pip install submodules/diff-gaussian-rasterization submodules/simple-knn submodu
 
 ### 0.2.quicikly start
 
-将`run_all.sh`中的
+将`run_all.sh`中的`ROOT_BASE`改为场景文件的数据集的父目录，`NAME`为实验名称，`VGGT_PATH`为上述VGGT权重和配置文件下载目录。并通过下面的指令运行所以实验的训练步骤：
 
 ```
 chmod +x .vscode/run_all.sh
 ./.vscode/run_all.sh
 ```
 
+每个场景的实验定量结果在`eval_logs/anysplat_scaffold/`获得，分别记录了每个场景的定量评价指标和所有场景的平均定量指标。<br>
 
-
-
-
+我们为官方评测提供了一个演示脚本`.vscode/eval_global.sh`，该脚本需要指定`root_dir`，`name`，`ply_path`为待测场景的根目录，待测实验名称和所待测的高斯点云路径的父目录。例如：
+```
+1751090600427
+    ├── images
+    ├── sparse
+    └── exp
+         └── 3dv_CASIA_GS
+               ├── test
+               └── point_cloud
+                        └── iteration_xxx
+```
+则`root_dir`为`1751090600427`，`name`为`3dv_CASIA_GS`，`ply_path`为`1751090600427/exp/3dv_CASIA_GS/point_cloud/iteration_xxx`
 
 
 ## 1.Methods

@@ -9,7 +9,7 @@ model_dir=$root_dir/exp/$name
 
 ply_path=$model_dir/point_cloud/iteration_4635
 python \
-    transformScaffold2Gaussian.py \
+    evalGSReconstruction.py \
     -s $root_dir -m $model_dir -r 2 \
     --load_ply $ply_path \
     --n_offsets $n_offsets
