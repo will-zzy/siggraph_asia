@@ -3,15 +3,15 @@
 # case=Truck
 case=1747834320424
 # case=1748165890960
-root_dir=/home/zzy/data/sa/$case
+root_dir=/data1/zzy/sa/eval_data_pinhole/$case
 # name=sig_GS_R2_speedy_forward
-name=sig_GS_useAnySplatAnchor_global_transform_debug
+name=sig_GS_round2
 # name=sig_GS_R2_baseline
 model_dir=$root_dir/exp/$name
 voxel_size=0.001
 appearance_dim=16
 update_init_factor=16
-VGGT_PATH=/home/zzy/lib/siggraph_asia/vggt
+VGGT_PATH=/home/zzy/engineer/siggraph_asia/vggt
 densify_grad_threshold=0.0005
 
 
@@ -23,8 +23,8 @@ densify_until_iter=4000
 update_from=100
 densify_from_iter=$update_from
 update_until=$densify_until_iter
-densification_interval=300
-FF_downsample=128 # 对anySplat的点下采样倍数，用于充当anchor
+densification_interval=200
+FF_downsample=64 # 对anySplat的点下采样倍数，用于充当anchor
 
 
 MLP_OPACITY_LR_INIT=0.002 # 0.002
@@ -36,22 +36,23 @@ OFFSET_LR_INIT=0.005 # 0.01
 
 
 
-preprocess(){
-    rm -r $1/sparse
-    python \
-        ./scripts/preprocess.py \
-        --root $1 \
-        --video-name $2\_flip.mp4 \
-        --videoinfo-txt inputs/videoInfo.txt \
-        --out-images-dir images
-    # -m debugpy --wait-for-client --listen localhost:5684 \
-    # -m debugpy --wait-for-client --listen localhost:5684 \
-}
-preprocess $root_dir $case
-
+# preprocess(){
+#     rm -r $1/sparse
+#     python \
+#         ./scripts/preprocess.py \
+#         --root $1 \
+#         --video-name $2\_flip.mp4 \
+#         --videoinfo-txt inputs/videoInfo.txt \
+#         --out-images-dir images
+#     # -m debugpy --wait-for-client --listen localhost:5684 \
+#     # -m debugpy --wait-for-client --listen localhost:5684 \
+# }
+# preprocess $root_dir $case
+device=3
 #  --eval
 rm -r $model_dir/test
-ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH python \
+ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH CUDA_VISIBLE_DEVICES=$device python \
+    -m debugpy --wait-for-client --listen localhost:5684 \
     train_dash.py -s \
     $root_dir -m $model_dir -r 2 \
     --resolution_mode const \
@@ -76,7 +77,8 @@ ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH python \
     --mlp_cov_lr_init $MLP_COV_LR_INIT \
     --mlp_color_lr_init $MLP_COLOR_LR_INIT \
     --feature_lr $FEATURE_LR_INIT \
-    --offset_lr_init $OFFSET_LR_INIT
+    --offset_lr_init $OFFSET_LR_INIT \
+    --images images_gt_downsampled
     # --useFF
     # --use_feat_bank true\
     # -m debugpy --wait-for-client --listen localhost:5685 \

@@ -173,6 +173,10 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     depth_params_file = os.path.join(path, "sparse/0", "depth_params.json")
+    
+    train_test_split_path = os.path.join(path, "train_test_split.json")
+    with open(train_test_split_path, 'r') as f:
+        train_test_exp = json.load(f)
     ## if depth_params_file isnt there AND depths file is here -> throw error
     depths_params = None
     if depths != "":
@@ -194,19 +198,20 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
             print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
             sys.exit(1)
 
-    if eval:
-        if "360" in path:
-            llffhold = 8
-        if llffhold:
-            print("------------LLFF HOLD-------------")
-            cam_names = [cam_extrinsics[cam_id].name for cam_id in cam_extrinsics]
-            cam_names = sorted(cam_names)
-            test_cam_names_list = [name for idx, name in enumerate(cam_names) if idx % llffhold == 0]
-        else:
-            with open(os.path.join(path, "sparse/0", "test.txt"), 'r') as file:
-                test_cam_names_list = [line.strip() for line in file]
-    else:
-        test_cam_names_list = []
+    test_cam_names_list = train_test_exp["test"]
+    # if eval:
+    #     if "360" in path:
+    #         llffhold = 8
+    #     if llffhold:
+    #         print("------------LLFF HOLD-------------")
+    #         cam_names = [cam_extrinsics[cam_id].name for cam_id in cam_extrinsics]
+    #         cam_names = sorted(cam_names)
+    #         test_cam_names_list = [name for idx, name in enumerate(cam_names) if idx % llffhold == 0]
+    #     else:
+    #         with open(os.path.join(path, "sparse/0", "test.txt"), 'r') as file:
+    #             test_cam_names_list = [line.strip() for line in file]
+    # else:
+    #     test_cam_names_list = []
 
     reading_dir = "images" if images == None else images
     cam_infos_unsorted = readColmapCameras(
@@ -216,11 +221,11 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     # train_cam_infos = [c for c in cam_infos if train_test_exp or not c.is_test]
-    train_cam_infos = [c for c in cam_infos]
-    # test_cam_infos = [c for c in cam_infos if c.is_test]
+    train_cam_infos = [c for c in cam_infos if not c.is_test]
+    test_cam_infos = [c for c in cam_infos if c.is_test]
     # test_cam_infos = []
     # test_cam_infos = [c for id, c in enumerate(cam_infos) if (id+2) % 1 == 0]
-    test_cam_infos=[c for c in cam_infos]
+    # test_cam_infos=[c for c in cam_infos]
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 

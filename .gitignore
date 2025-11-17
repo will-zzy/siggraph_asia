@@ -16,3 +16,4 @@ model.safetensors*
 *.ply
 *.pt
 eval_logs
+*.run
