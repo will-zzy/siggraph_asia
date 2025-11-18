@@ -31,7 +31,7 @@ mono_depth(){
 }
 
 
-NAME=3DV_CASIA_catSfMPoints_poseAlign_depth_prior
+NAME=3DV_CASIA_catSfMPoints_2_poseAlign_depth_prior_FF48_densify5000
 BASE_DIR=/root/data/eval_data_pinhole
 EXP_DIR=/root/data/eval_data_pinhole/$NAME
 # case=1747834320424
@@ -39,24 +39,24 @@ EXP_DIR=/root/data/eval_data_pinhole/$NAME
 voxel_size=0.001
 appearance_dim=16
 update_init_factor=16
-VGGT_PATH=/home/zzy/engineer/siggraph_asia/vggt
-densify_grad_threshold=0.0006
+VGGT_PATH=$(pwd)/vggt
+densify_grad_threshold=0.0005
 
 
 feat_dim=64
 n_offsets=10 # 每个anchor的子高斯数
 
-densify_until_iter=4000
+densify_until_iter=4500
 update_from=500
 densify_from_iter=$update_from
 update_until=$densify_until_iter
 update_interval=100
 # FF_downsample=100000 # 对anySplat的点下采样倍数，用于充当anchor
-FF_downsample=128 # 对anySplat的点下采样倍数，用于充当anchor
+FF_downsample=80 # 对anySplat的点下采样倍数，用于充当anchor
 
 
 MLP_OPACITY_LR_INIT=0.005 # 0.002
-MLP_COV_LR_INIT=0.006 # 0.004
+MLP_COV_LR_INIT=0.003 # 0.004
 MLP_COLOR_LR_INIT=0.012 # 0.008
 FEATURE_LR_INIT=0.01 # 0.0075
 OFFSET_LR_INIT=0.01 # 0.01
@@ -79,7 +79,7 @@ MAX_N_GAUSSIAN=3000000
 device=0
 #  --eval
 # rm -r $model_dir/test
-LOG_FILE=$EXP_DIR/all_cases_results.csv
+LOG_FILE=$EXP_DIR/metrics.json
 rm -f "$LOG_FILE"
 for case in "${CASES[@]}"; do
     
@@ -133,78 +133,3 @@ done
 echo ""
 echo "----------------------------------------"
 echo ""
-
-# 对所有case结果进行处理，输出平均 30s / 最后一条 的指标与平均时间
-EVAL_DIR="$EXP_DIR"
-SUMMARY_FILE="$EVAL_DIR/summary.txt"
-
-if [ ! -f "$LOG_FILE" ]; then
-    echo "Log file not found: $LOG_FILE"
-    exit 1
-fi
-
-rm -f "$SUMMARY_FILE"
-
-# 读取 TSV/CSV：列为 [case_id, time, ssim, lpips, psnr]
-awk -F'[,\t]' '
-# 过滤空行/列数不足
-NF < 5 { next }
-
-{
-    # 去前后空白
-    for(i=1;i<=5;i++) { gsub(/^[ \t]+|[ \t]+$/, "", $i) }
-
-    case_id = $1                    # 用字符串作 key（科学计数法也安全）
-    t  = $2 + 0                     # 数值时间
-    s  = $3 + 0                     # SSIM
-    l  = $4 + 0                     # LPIPS
-    p  = $5 + 0                     # PSNR
-
-    # 30s 统计（精确等于30）
-    if (t == 30) {
-        sum30_p += p; sum30_s += s; sum30_l += l; cnt30++
-    }
-
-    # 每个 case 只保留时间最大的那条作为“第二轮结束”
-    if ( !(case_id in tmax) || t > tmax[case_id] ) {
-        tmax[case_id] = t
-        pmax[case_id] = p
-        smax[case_id] = s
-        lmax[case_id] = l
-    }
-}
-
-END {
-    # 输出 30s 平均
-    if (cnt30 > 0) {
-        avg30_p = sum30_p / cnt30
-        avg30_s = sum30_s / cnt30
-        avg30_l = sum30_l / cnt30
-        printf "AVERAGE@30s:   PSNR=%.4f  SSIM=%.4f  LPIPS=%.4f\n", avg30_p, avg30_s, avg30_l
-    } else {
-        print "AVERAGE@30s:   No 30s rows."
-    }
-
-    # 汇总“每个case的最后一条”（时间最大）
-    ncases = 0
-    for (k in tmax) {
-        ncases++
-        sump += pmax[k]
-        sums += smax[k]
-        suml += lmax[k]
-        sumt += tmax[k]
-    }
-    if (ncases > 0) {
-        printf "AVERAGE@final: PSNR=%.4f  SSIM=%.4f  LPIPS=%.4f  (avg_time=%.1f s over %d cases)\n",
-               (sump/ncases), (sums/ncases), (suml/ncases), (sumt/ncases), ncases
-    } else {
-        print "AVERAGE@final: No rows."
-    }
-}
-' "$LOG_FILE" | tee "$SUMMARY_FILE"
-
-echo
-echo "----------------------------------------"
-echo
-echo "Logs written to $LOG_FILE"
-echo "Summary written to $SUMMARY_FILE"

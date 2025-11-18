@@ -169,7 +169,7 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     dataset, opt, pipe = lp.extract(args), op.extract(args), pp.extract(args)
     scaffold_gs = GaussianModel(n_offsets=dataset.n_offsets)
-    vanilla_gs = GaussianModel_origin(4, "sparse_adam")
+    # vanilla_gs = GaussianModel_origin(4, "sparse_adam")
     scene = Scene(dataset, scaffold_gs, pipe, shuffle=False)
     scaffold_gs.load_mlp_checkpoints(args.load_ply)
     scaffold_gs.load_ply_sparse_gaussian(os.path.join(args.load_ply, "point_cloud.ply"))
@@ -183,6 +183,6 @@ if __name__ == "__main__":
     rows = [list(map(float, line.strip().split())) for line in lines]
     global_transform = torch.tensor(rows, dtype=torch.float32)
     
-    
+    case_name = dataset.source_path.split("/")[-1]
     with torch.no_grad():
-        eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), -1, 0, global_transform=global_transform)
+        eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), -1, 0, args.log_file, global_transform = global_transform, all_time=0.0)

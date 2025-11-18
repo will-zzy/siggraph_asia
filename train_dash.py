@@ -655,7 +655,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter += 1
     
     # 添加时间计数器，在iteration开始后开始计时
-    start_time = time.time()
     eval_time = None
     time_save_iterations = [30, 60]  # 30秒和60秒时保存
     
@@ -679,6 +678,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     
     pose_optimizer = torch.optim.Adam(l)
     
+    start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1):
 
         iter_start.record()
@@ -748,7 +748,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             depth_mask = viewpoint_cam.depth_mask.cuda()
 
             Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
-            Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure *0.01
+            Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure *0.3
             loss += Ll1depth
             Ll1depth = Ll1depth.item()
         else:
@@ -788,33 +788,40 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Log and save
             ########## TODO 是否要删除test视角渲染？
-            iter_time = iter_start.elapsed_time(iter_end)
-            training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
-            if (iteration in saving_iterations):
-                print("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
+            # iter_time = iter_start.elapsed_time(iter_end)
+            # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
+            # if (iteration in saving_iterations):
+            #     print("\n[ITER {}] Saving Gaussians".format(iteration))
+            #     scene.save(iteration)
             ##########
                 
             #  检查时间计数器，30秒和60秒时保存结果
             elapsed_time = time.time() - start_time
             case_name = dataset.source_path.split('/')[-1]
-            if elapsed_time >= 30 and 30 in time_save_iterations:
-                eval_start_time = time.time()
-                print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
-                eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file, global_transform)
-                eval_time = time.time() - eval_start_time
-                time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
-            elif (eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
+            # if elapsed_time >= 30 and 30 in time_save_iterations:
+            #     eval_start_time = time.time()
+            #     print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
+            #     eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file, global_transform)
+            #     eval_time = time.time() - eval_start_time
+            #     time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
+            # elif (eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
+            #     print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
+            #     all_time = elapsed_time - eval_time
+            #     eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
+            #     scene.save(iteration)
+            #     time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
+            #     # 到60秒后退出训练
+                
+            #     sys.exit(0)
+            if (elapsed_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
-                all_time = elapsed_time - eval_time
+                all_time = elapsed_time
                 eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
                 
                 sys.exit(0)
-
-            # optim_start.record()
 
 
 
@@ -1045,15 +1052,31 @@ def eval(case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteratio
         print("\n[ITER {}] Evaluating {}sec: L1 {} PSNR {} LPIPS {} SSIM {}".format(iteration, time, l1_test, psnr_test, lpips_test, ssim_test))
         
         # 记录到文件
+        # if log_file is not None:
+        #     with open(log_file, 'a', newline='') as csvfile:
+        #         log_writer = csv.writer(csvfile)
+        #         if time == 30:
+        #             log_writer.writerow([case_name, 30.0, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
+        #         else:
+        #             log_writer.writerow([case_name, f"{float(all_time):.1f}", f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
         if log_file is not None:
-            with open(log_file, 'a', newline='') as csvfile:
-                log_writer = csv.writer(csvfile)
-                if time == 30:
-                    log_writer.writerow([case_name, 30.0, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
-                else:
-                    log_writer.writerow([case_name, f"{float(all_time):.1f}", f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
-            
-    torch.cuda.empty_cache()
+            data = {}
+            if os.path.exists(log_file):
+                with open(log_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+            t_val = f"{float(all_time):.1f}"
+
+            psnr_val = f"{float(psnr_test):.4f}"
+
+            data[case_name] = {
+                "PSNR": psnr_val,
+                "time": t_val
+            }
+
+            with open(log_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)   
+            torch.cuda.empty_cache()
     
 
 if __name__ == "__main__":
