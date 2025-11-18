@@ -1,0 +1,123 @@
+[11/18 08:06:28] root INFO Config:
+batch_size = 1
+batchsize_per_gpu = 1
+cudnn_benchmark = True
+data_basic = dict(
+    canonical_space=dict(focal_length=1000.0, img_size=(
+        540,
+        960,
+    )),
+    clip_depth_range=(
+        0.1,
+        200,
+    ),
+    crop_size=(
+        616,
+        1064,
+    ),
+    depth_normalize=(
+        0.1,
+        200,
+    ),
+    depth_range=(
+        0,
+        1,
+    ),
+    vit_size=(
+        616,
+        1064,
+    ))
+load_from = '/root/engineer/copy/siggraph_asia/metric3D/weight/metric_depth_vit_giant2_800k.pth'
+log_file = './show_dirs/vit.raft5.giant2/20251118_080628/20251118_080628.log'
+max_value = 200
+mldb_info = dict(
+    NYU=dict(
+        data_root='nyu',
+        mldb_root='/mnt/nas/share/home/xugk/data/',
+        test_annotations_path='nyu/test_annotation.json'),
+    checkpoint=dict(
+        convnext_base='convnext/convnext_base_22k_1k_384.pth',
+        convnext_large='convnext/convnext_large_22k_1k_384.pth',
+        convnext_small='convnext/convnext_small_22k_1k_384.pth',
+        convnext_tiny='convnext/convnext_tiny_22k_1k_384.pth',
+        mldb_root='/mnt/nas/share/home/xugk/ckpt',
+        vit_giant2_reg='vit/dinov2_vitg14_reg4_pretrain.pth',
+        vit_large='vit/dinov2_vitl14_pretrain.pth',
+        vit_large_reg='vit/dinov2_vitl14_reg4_pretrain.pth',
+        vit_small_reg='vit/dinov2_vits14_reg4_pretrain.pth'))
+model = dict(
+    backbone=dict(
+        checkpoint=
+        '/mnt/nas/share/home/xugk/ckpt/vit/dinov2_vitg14_reg4_pretrain.pth',
+        drop_path_rate=0.0,
+        out_channels=[
+            1536,
+            1536,
+            1536,
+            1536,
+        ],
+        prefix='backbones.',
+        type='vit_giant2_reg'),
+    decode_head=dict(
+        decoder_channels=[
+            192,
+            384,
+            768,
+            1536,
+            1536,
+        ],
+        detach=False,
+        feature_channels=[
+            384,
+            768,
+            1536,
+            1536,
+        ],
+        hidden_channels=[
+            192,
+            192,
+            192,
+            192,
+        ],
+        in_channels=[
+            1536,
+            1536,
+            1536,
+            1536,
+        ],
+        iters=8,
+        n_downsample=2,
+        n_gru_layers=3,
+        num_register_tokens=4,
+        prefix='decode_heads.',
+        slow_fast_gru=True,
+        type='RAFTDepthNormalDPT5',
+        up_scale=7,
+        use_cls_token=True),
+    type='DensePredModel')
+show_dir = './show_dirs/vit.raft5.giant2/20251118_080628'
+test_metrics = [
+    'abs_rel',
+    'rmse',
+    'silog',
+    'delta1',
+    'delta2',
+    'delta3',
+    'rmse_log',
+    'log10',
+    'sq_rel',
+]
+thread_per_gpu = 1
+vis = False
+ 
+[11/18 08:06:28] root INFO Distributed training: False 
+[11/18 08:06:31] dinov2 WARNING xFormers not available 
+[11/18 08:06:31] dinov2 WARNING xFormers not available 
+[11/18 08:06:31] dinov2 WARNING xFormers not available 
+[11/18 08:06:31] dinov2 WARNING xFormers not available 
+[11/18 08:06:31] dinov2 INFO using SwiGLU layer as FFN 
+[11/18 08:06:31] dinov2 INFO using SwiGLU layer as FFN 
+[11/18 08:06:45] root INFO Loading weight '/root/engineer/copy/siggraph_asia/metric3D/weight/metric_depth_vit_giant2_800k.pth' 
+[11/18 08:06:45] root INFO Loading weight '/root/engineer/copy/siggraph_asia/metric3D/weight/metric_depth_vit_giant2_800k.pth' 
+[11/18 08:06:49] root INFO Successfully loaded weight: '/root/engineer/copy/siggraph_asia/metric3D/weight/metric_depth_vit_giant2_800k.pth' 
+[11/18 08:06:49] root INFO Successfully loaded weight: '/root/engineer/copy/siggraph_asia/metric3D/weight/metric_depth_vit_giant2_800k.pth' 

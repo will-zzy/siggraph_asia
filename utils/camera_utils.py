@@ -16,11 +16,17 @@ import cv2
 from tqdm import tqdm
 import torch
 WARNED = False
-
+import os
 def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dataset):
     from scene.cameras import Camera
     image = Image.open(cam_info.image_path)
     invdepthmap = None
+    if not cam_info.is_test:
+        invdepth_path = os.path.join(args.model_path, "mono_depths",os.path.basename(cam_info.image_path).replace(".png", "_depth.npy").replace(".jpg", "_depth.npy"))
+        # invdepth_path = os.path.dirname(os.path.dirname(cam_info.image_path)) + "/mono_depths/" + os.path.basename(cam_info.image_path).replace(".png", "_depth.npy").replace(".jpg", "_depth.npy")
+        # invdepth_path = cam_info.image_path.replace("images*", "inv_depths").replace(".png", ".npy").replace(".jpg", ".npy")
+        invdepthmap = np.load(invdepth_path)
+    
     # if cam_info.depth_path != "":
     #     try:
     #         if is_nerf_synthetic:

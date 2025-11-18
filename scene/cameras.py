@@ -70,7 +70,8 @@ class Camera(nn.Module):
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
 
-        self.invdepthmap = None
+        # inv_depth_path = 
+        # self.invdepthmap = np.load("")
         self.depth_reliable = False
         if invdepthmap is not None:
             self.depth_mask = torch.ones_like(self.alpha_mask)
@@ -78,13 +79,13 @@ class Camera(nn.Module):
             self.invdepthmap[self.invdepthmap < 0] = 0
             self.depth_reliable = True
 
-            if depth_params is not None:
-                if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
-                    self.depth_reliable = False
-                    self.depth_mask *= 0
+            # if depth_params is not None:
+            #     if depth_params["scale"] < 0.2 * depth_params["med_scale"] or depth_params["scale"] > 5 * depth_params["med_scale"]:
+            #         self.depth_reliable = False
+            #         self.depth_mask *= 0
                 
-                if depth_params["scale"] > 0:
-                    self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]
+            #     if depth_params["scale"] > 0:
+            #         self.invdepthmap = self.invdepthmap * depth_params["scale"] + depth_params["offset"]
 
             if self.invdepthmap.ndim != 2:
                 self.invdepthmap = self.invdepthmap[..., 0]

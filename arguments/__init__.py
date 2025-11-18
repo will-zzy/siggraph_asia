@@ -87,6 +87,7 @@ class PipelineParams(ParamGroup):
         self.max_n_gaussian = -1
         self.useFF = False
         self.FF_downsample=8
+        self.max_n_gaussian=4000000
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):

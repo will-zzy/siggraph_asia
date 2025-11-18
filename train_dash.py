@@ -7,6 +7,7 @@ from os import makedirs
 import shutil, pathlib
 from pathlib import Path
 import json
+import uuid
 from torch import nn
 from PIL import Image
 import torchvision.transforms.functional as tf
@@ -58,6 +59,226 @@ class CamNamePoseInfo(NamedTuple):
     R: np.array
     T: np.array
     pose: np.array # 注意anySplat出来的c2w
+    
+    
+def _o3d_from_np(points, estimate_normals=False, voxel_size=None):
+    import open3d as o3d
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points.astype(np.float64))
+    if estimate_normals:
+        # 邻域半径与邻居数可按体素尺度调
+        if voxel_size is None:
+            voxel_size = max(1e-3, float(np.linalg.norm(points.max(0)-points.min(0)))/200.0)
+        radius = 2.5 * voxel_size
+        pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=32))
+        pcd.orient_normals_consistent_tangent_plane(10)
+    return pcd
+
+def _downsample_auto(pcd, voxel_size):
+    import open3d as o3d
+    return pcd.voxel_down_sample(voxel_size=max(1e-6, float(voxel_size)))
+
+def _compute_scale_rot_trans_from_4x4(T):
+    """
+    Open3D 的 with_scaling 估计会把 sR 放在左上 3x3。
+    这里把 s、R、t 拆出来：R 正交化，s 取列范数平均。
+    """
+    M = T[:3, :3]
+    t = T[:3, 3].reshape(3, 1)
+    # 估计尺度：三列范数的平均（对正交 R，列范数应全为 s）
+    s = float(np.mean(np.linalg.norm(M, axis=0)))
+    # 防御性处理
+    if s <= 0:
+        s = 1.0
+    R = M / s
+    # 正交化（极分解），避免数值漂移
+    U, _, Vt = np.linalg.svd(R)
+    R = (U @ Vt)
+    if np.linalg.det(R) < 0:
+        R[:, -1] *= -1
+    return s, R, t
+
+def _global_ransac_with_fpfh(src_down, tgt_down, voxel_size):
+    import open3d as o3d
+    # FPFH 特征
+    radius_normal = 2.5 * voxel_size
+    radius_feature = 5.0 * voxel_size
+    src_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=32))
+    tgt_down.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(radius=radius_normal, max_nn=32))
+    src_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        src_down, o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=64)
+    )
+    tgt_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        tgt_down, o3d.geometry.KDTreeSearchParamHybrid(radius=radius_feature, max_nn=64)
+    )
+
+    distance_threshold = 1.5 * voxel_size
+    result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        src_down, tgt_down, src_fpfh, tgt_fpfh,
+        mutual_filter=True,
+        max_correspondence_distance=distance_threshold,
+        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        ransac_n=4,
+        checkers=[
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(2.0 * voxel_size),
+        ],
+        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(40000, 1000)
+    )
+    return result.transformation
+
+def align_icp_with_sfm(
+    gaussians,
+    colmap_xyz,                 # numpy [N,3], 来自 points3D.txt
+    voxel_div=200,              # 体素尺度 = 对角线 / voxel_div
+    use_point_to_plane=True,    # 是否用点到平面 ICP
+    with_scaling=True,          # 是否估计尺度（Sim(3)）
+    ply_path=None
+):
+    """
+    用 COLMAP SFM 稀疏点与 AnySplat 高斯中心做 Sim(3) 对齐（RANSAC 预对齐 + ICP 精化）。
+    返回 (4x4 变换矩阵, stats, gaussians_aligned)
+    """
+    # --- 取源（AnySplat 高斯中心）与目标（COLMAP 稀疏点） ---
+    src_xyz = gaussians._xyz.detach().cpu().numpy().astype(np.float64)  # [M,3]
+    tgt_xyz = np.asarray(colmap_xyz, dtype=np.float64)                   # [N,3]
+    if src_xyz.size == 0 or tgt_xyz.size == 0:
+        raise ValueError("Empty source or target points for ICP alignment.")
+
+    # 自动体素尺度
+    diag = float(np.linalg.norm(np.max(tgt_xyz, axis=0) - np.min(tgt_xyz, axis=0)))
+    voxel_size = max(diag / float(voxel_div), 1e-4)
+
+    import open3d as o3d
+    src_pcd = _o3d_from_np(src_xyz, estimate_normals=False)
+    tgt_pcd = _o3d_from_np(tgt_xyz, estimate_normals=True, voxel_size=voxel_size)
+
+    # 下采样（提升稳健性）
+    src_down = _downsample_auto(src_pcd, voxel_size)
+    tgt_down = _downsample_auto(tgt_pcd, voxel_size)
+
+    # ---- 全局 RANSAC 初始位姿（不带尺度） ----
+    init_T = _global_ransac_with_fpfh(src_down, tgt_down, voxel_size)
+
+    # ---- ICP 精化（可带尺度） ----
+    if use_point_to_plane and len(np.asarray(tgt_down.normals)) == len(np.asarray(tgt_down.points)):
+        est = o3d.pipelines.registration.TransformationEstimationPointToPlane()
+        # 如果需要 with_scaling 的 ICP，Open3D 没有 point-to-plane+with_scaling，退回 point-to-point
+        if with_scaling:
+            est = o3d.pipelines.registration.TransformationEstimationPointToPoint(with_scaling=True)
+    else:
+        est = o3d.pipelines.registration.TransformationEstimationPointToPoint(with_scaling=with_scaling)
+
+    icp_threshold = 3.0 * voxel_size
+    result_icp = o3d.pipelines.registration.registration_icp(
+        src_down, tgt_down,
+        icp_threshold,
+        init_T,
+        est,
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=100)
+    )
+    T = result_icp.transformation  # 4x4
+
+    # ---- 拆解 s, R, t ----
+    s, R, t = _compute_scale_rot_trans_from_4x4(T)
+    stats = {"rotation": R, "translation": t.reshape(3), "scale": s, "icp_fitness": result_icp.fitness, "icp_rmse": result_icp.inlier_rmse}
+
+    # ---- 应用到高斯 ----
+    rotation = torch.tensor(R, device=gaussians._xyz.device, dtype=torch.float32)
+    translation = torch.tensor(t.reshape(1,3), device=gaussians._xyz.device, dtype=torch.float32)
+    scale = torch.tensor([s], device=gaussians._xyz.device, dtype=torch.float32)
+
+    # 位置
+    xyz = gaussians._xyz
+    xyz = scale * (xyz @ rotation.t()) + translation
+    gaussians._xyz.data.copy_(xyz); del xyz
+
+    # 尺度
+    scaling = gaussians._scaling
+    scaling = scaling + torch.log(scale * 2.0)
+    gaussians._scaling.data.copy_(scaling); del scaling
+
+    # 旋转
+    rots = gaussians._rotation
+    rot_matrices = quaternion_to_matrix(rots)
+    new_rot_matrices = rotation @ rot_matrices
+    rots = matrix_to_quaternion(new_rot_matrices)
+    rots = rots / torch.norm(rots, dim=-1, keepdim=True)
+    gaussians._rotation.data.copy_(rots); del rots, rot_matrices, new_rot_matrices
+
+    # SH 旋转
+    features_extra = gaussians._features_rest
+    features_extra = sh_rotation(features_extra.reshape((features_extra.shape[0],3,-1)), gaussians._features_dc, rotation)
+    gaussians._features_rest.data.copy_(features_extra.reshape((features_extra.shape[0],-1,3))); del features_extra
+
+    # 可选：保存可视化或 .ply
+    if ply_path is not None:
+        gaussians.save_ply(ply_path)
+
+    # 可选：保存轨迹对齐图（此处用点云对齐，不再画轨迹）
+    return T, stats, gaussians
+def cat_sparse_points_into_gaussians(gaussians, colmap_xyz, colmap_rgb):
+    """
+    将 COLMAP 稀疏点拼接进高斯：
+      - 复制现有各属性（scaling/opacity/rotation/features_rest 等）n_new 份
+      - 将复制出的那一段的 xyz 改为 colmap_xyz
+      - 将复制出的那一段的 features_dc 改为 colmap_rgb
+    形状自适配：features_dc 既可能是 [N,3,1] 也可能是 [N,1,3]
+    """
+    device = gaussians._xyz.device
+    dtype  = gaussians._xyz.dtype
+
+    # --- 准备新点 ---
+    xyz_np = np.asarray(colmap_xyz, dtype=np.float32)
+    rgb_np = np.asarray(colmap_rgb, dtype=np.float32)
+
+    # 若是 0~255，转换到 0~1
+    if rgb_np.max() > 1.5:
+        rgb_np = rgb_np / 255.0
+
+    new_xyz = torch.from_numpy(xyz_np).to(device=device, dtype=dtype)               # [K,3]
+    new_rgb = torch.from_numpy(rgb_np).to(device=device, dtype=dtype)               # [K,3]
+    n_new   = new_xyz.shape[0]
+
+    # --- 取一个模板，复制属性 ---
+    def repeat_like(t, k):
+        # 以第 0 个为模板，repeat k 次
+        return t[:1].expand(k, *t.shape[1:]).clone()
+
+    tmpl_scaling   = repeat_like(gaussians._scaling,   n_new)   # [...,]
+    tmpl_opacity   = repeat_like(gaussians._opacity,   n_new)   # [...,]
+    tmpl_rotation  = repeat_like(gaussians._rotation,  n_new)   # [K,4] 四元数
+    tmpl_frest     = repeat_like(gaussians._features_rest, n_new)  # [K, ?, 3]（你当前实现）
+    tmpl_fdc       = repeat_like(gaussians._features_dc,   n_new)  # [K, 3,1] 或 [K,1,3]
+
+    # --- 将 template 段的 xyz / fdc 替换为 sfm 的 xyz / rgb ---
+    # xyz 直接替换
+    new_xyz_block = new_xyz
+
+    # features_dc 形状适配
+    # 常见两种： [N,3,1] 以及 [N,1,3]
+    if tmpl_fdc.dim() == 3 and tmpl_fdc.shape[1:] == (3,1):
+        new_fdc_block = new_rgb.unsqueeze(-1)          # [K,3,1]
+    elif tmpl_fdc.dim() == 3 and tmpl_fdc.shape[1:] == (1,3):
+        new_fdc_block = new_rgb.unsqueeze(1)           # [K,1,3]
+    else:
+        # 兜底：按最后一维=3 去适配
+        if tmpl_fdc.size(-1) == 3:
+            # e.g. [N,1,3] / [N,?,3]
+            shape_front = list(tmpl_fdc.shape[1:-1])
+            new_fdc_block = new_rgb.view(n_new, *([1]*len(shape_front)), 3).expand(n_new, *shape_front, 3).clone()
+        else:
+            raise ValueError(f"Unsupported features_dc shape: {tuple(tmpl_fdc.shape)}")
+
+    # --- 拼接回去 ---
+    gaussians._xyz          = torch.cat([gaussians._xyz,          new_xyz_block], dim=0)
+    gaussians._scaling      = torch.cat([gaussians._scaling,      tmpl_scaling],  dim=0)
+    gaussians._opacity      = torch.cat([gaussians._opacity,      tmpl_opacity],  dim=0)
+    gaussians._rotation     = torch.cat([gaussians._rotation,     tmpl_rotation], dim=0)
+    gaussians._features_rest= torch.cat([gaussians._features_rest,tmpl_frest],    dim=0)
+    gaussians._features_dc  = torch.cat([gaussians._features_dc,  new_fdc_block], dim=0)
+
+    return gaussians
 def anySplat(dataset, opt, pipe):
     
     from pathlib import Path
@@ -122,9 +343,12 @@ def anySplat(dataset, opt, pipe):
     # Load and preprocess example images (replace with your own image paths)
     
     images_dir = os.path.join(dataset.source_path, dataset.images)
-    from scene.colmap_loader import read_extrinsics_text, qvec2rotmat
+    from scene.colmap_loader import read_extrinsics_text, qvec2rotmat, read_points3D_text
     cameras_extrinsic_file = os.path.join(dataset.source_path, "sparse/0", "images.txt")
+    SFM_pts_file = os.path.join(dataset.source_path, "sparse/0", "points3D.txt")
+    
     cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
+    xyz, rgb, _ = read_points3D_text(SFM_pts_file) # 来着colmap的点
     imgs = []
     cams_unsorted = []
     for idx, key in enumerate(cam_extrinsics):
@@ -137,11 +361,22 @@ def anySplat(dataset, opt, pipe):
     cams = sorted(cams_unsorted.copy(), key = lambda x : x.image_name)
     
     # image_names = os.listdir(images_dir)
+    with open(f"{dataset.source_path}/train_test_split.json", 'r') as f:
+        train_test_exp = json.load(f)
     slam_c2ws = []
     for cam in cams:
         img_name = cam.image_name
-        imgs.append(os.path.join(images_dir, img_name))
+        if img_name not in train_test_exp["train"]:
+            continue
+        image_path = os.path.join(images_dir, img_name)
+        if not os.path.exists(image_path):
+            image_path = os.path.join(os.path.dirname(images_dir), "images", extr.name)
+        imgs.append(os.path.join(image_path))
         slam_c2ws.append(cam.pose[None])
+    interval = int(len(imgs) / 40) + 1 # 处理40张train
+    imgs = imgs[::interval]
+    slam_c2ws = slam_c2ws[::interval]
+    
     slam_c2ws = np.concatenate(slam_c2ws, axis=0)
     images = [process_image(image_name) for id, image_name in enumerate(imgs) if id < 60]
     images = torch.stack(images, dim=0).unsqueeze(0).to(device) # [1, K, 3, 448, 448]
@@ -151,14 +386,17 @@ def anySplat(dataset, opt, pipe):
     gs, pred_context_pose = model.inference((images+1)*0.5)
     # gaussians.mean
     # downsample = 8
-    downsample = pipe.FF_downsample # for scaffold's anchor
+    # downsample_points = pipe.FF_downsample # for scaffold's anchor
+    # interval = int(gs.means.shape[1] / downsample_points) + 1
+    
+    interval = pipe.FF_downsample
     gaussians = GaussianModel_origin(4, "sparse_adam")
-    gaussians._xyz = gs.means[0, ::downsample, ...]
-    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::downsample, ...])
-    gaussians._opacity = gaussians.inverse_opacity_activation(gs.opacities[0, ::downsample, ...][..., None])
-    gaussians._rotation = gs.rotations[0, ::downsample, ...]
-    gaussians._features_dc = gs.harmonics[0, ::downsample, :, :1].transpose(1, 2)
-    gaussians._features_rest = gs.harmonics[0, ::downsample, :, 1:].transpose(1, 2)
+    gaussians._xyz = gs.means[0, ::interval, ...]
+    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::interval, ...])
+    gaussians._opacity = gaussians.inverse_opacity_activation(gs.opacities[0, ::interval, ...][..., None])
+    gaussians._rotation = gs.rotations[0, ::interval, ...]
+    gaussians._features_dc = gs.harmonics[0, ::interval, :, :1].transpose(1, 2)
+    gaussians._features_rest = gs.harmonics[0, ::interval, :, 1:].transpose(1, 2)
     
     del gs, model
     torch.cuda.empty_cache()
@@ -169,6 +407,20 @@ def anySplat(dataset, opt, pipe):
     pred_all_intrinsic = pred_context_pose['intrinsic'][0] # [N_nums, 3, 3]
     
     transform, stats, gaussians_aligned = align(gaussians=gaussians, anysplat_traj=pred_all_extrinsic, slam_traj=slam_c2ws)
+    # transform, stats, gaussians_aligned = align_icp_with_sfm(
+    #     gaussians=gaussians,
+    #     colmap_xyz=xyz,          # points3D.txt 读到的 sfm 稀疏点
+    #     voxel_div=200,           # 体素大小 = 场景对角线 / voxel_div，可按数据调
+    #     use_point_to_plane=True, # 有法线时更稳；没有就设 False
+    #     with_scaling=True        # 允许估计尺度（Sim(3)）
+    # )
+    gaussians_aligned = cat_sparse_points_into_gaussians(
+    gaussians_aligned,
+    colmap_xyz=xyz,   # read_points3D_text 返回的 xyz
+    colmap_rgb=rgb    # read_points3D_text 返回的 rgb
+    )
+    
+    
     return gaussians_aligned, pred_all_extrinsic, pred_all_intrinsic
     # save_interpolated_video(pred_all_extrinsic, pred_all_intrinsic, b, h, w, gaussians, image_folder, model.decoder)
 
@@ -273,13 +525,13 @@ def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=No
     aligned_centers = scale * aligned_centers + translation
     gt_centers = target_tensor[:, :3, 3].cpu().numpy()
 
-    # base_dir = Path(ply_path).parent if ply_path is not None else Path.cwd() / "align_outputs"
-    # base_dir.mkdir(parents=True, exist_ok=True)
-    # base_name = Path(ply_path).stem if ply_path is not None else "align"
-    # unique_tag = uuid.uuid4().hex[:8]
-    # prefix = f"{base_name}_{unique_tag}"
+    base_dir = Path(ply_path).parent if ply_path is not None else Path.cwd() / "align_outputs"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    base_name = Path(ply_path).stem if ply_path is not None else "align"
+    unique_tag = uuid.uuid4().hex[:8]
+    prefix = f"{base_name}_{unique_tag}"
 
-    # png_path = base_dir / f"{prefix}_traj.png"
+    png_path = base_dir / f"{prefix}_traj.png"
     # aligned_ply_path = base_dir / f"{prefix}_aligned_traj.ply"
     # gt_ply_path = base_dir / f"{prefix}_gt_traj.ply"
 
@@ -385,7 +637,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # optim_start = torch.cuda.Event(enable_timing = True)
     # optim_end = torch.cuda.Event(enable_timing = True)
     # total_time = 0.0
-
+    all_time=60.0
     use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
 
@@ -496,7 +748,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             depth_mask = viewpoint_cam.depth_mask.cuda()
 
             Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
-            Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure 
+            Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure *0.01
             loss += Ll1depth
             Ll1depth = Ll1depth.item()
         else:
@@ -527,9 +779,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             if iteration % 10 == 0:
                 if pipe.useFF:
-                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_scaling.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
+                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians._scaling.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
                 else:
-                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians.get_scaling.shape[0] * dataset.n_offsets}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
+                    progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians._scaling.shape[0] * dataset.n_offsets}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -545,15 +797,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
             #  检查时间计数器，30秒和60秒时保存结果
             elapsed_time = time.time() - start_time
+            case_name = dataset.source_path.split('/')[-1]
             if elapsed_time >= 30 and 30 in time_save_iterations:
                 eval_start_time = time.time()
                 print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
-                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file, global_transform)
+                eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file, global_transform)
                 eval_time = time.time() - eval_start_time
                 time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
             elif (eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
-                eval(scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform)
+                all_time = elapsed_time - eval_time
+                eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
@@ -566,7 +820,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             if not pipe.useFF: # 不使用FF，使用scaffold-GS
                 # Densification
-                if iteration < opt.densify_until_iter and iteration > opt.start_stat:
+                if iteration < opt.densify_until_iter and iteration > opt.start_stat and (gaussians._scaling.shape[0] * dataset.n_offsets) < pipe.max_n_gaussian:
                     # Keep track of max radii in image-space for pruning
                     gaussians.training_statis(viewspace_point_tensor, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
                     # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
@@ -626,7 +880,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and (gaussians._scaling.shape[0] * dataset.n_offsets) < pipe.max_n_gaussian:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                         # Apply DashGaussian primitive scheduler to control densification.
                         densify_rate = scheduler.get_densify_rate(iteration, gaussians.get_xyz.shape[0], render_scale)
@@ -671,7 +925,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 cam_trans_delta.data.fill_(0)
     with open(os.path.join(scene.model_path, "TRAIN_INFO"), "w+") as f:
         # f.write("Training Time: {:.2f} seconds, {:.2f} minutes\n".format(total_time, total_time / 60.))
-        f.write("GS Number: {}\n".format(gaussians.get_scaling.shape[0]))
+        f.write("GS Number: {}\n".format(gaussians._scaling.shape[0]))
         
     
     
@@ -749,7 +1003,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_scalar('total_points', scene.gaussians.get_scaling.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None):
+def eval(case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None, all_time=None):
     torch.cuda.empty_cache()
     config = {'name': 'test', 'cameras' : scene.getTestCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
@@ -795,9 +1049,9 @@ def eval(scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, tim
             with open(log_file, 'a', newline='') as csvfile:
                 log_writer = csv.writer(csvfile)
                 if time == 30:
-                    log_writer.writerow([scene.model_path.split('/')[-3], 30, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
-                elif time == 60:
-                    log_writer.writerow([scene.model_path.split('/')[-3], 60, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
+                    log_writer.writerow([case_name, 30.0, f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
+                else:
+                    log_writer.writerow([case_name, f"{float(all_time):.1f}", f"{ssim_test:.4f}", f"{lpips_test:.4f}", f"{psnr_test:.4f}"])
             
     torch.cuda.empty_cache()
     
