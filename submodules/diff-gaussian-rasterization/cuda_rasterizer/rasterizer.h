@@ -45,6 +45,7 @@ namespace CudaRasterizer
 			const float scale_modifier,
 			const float* rotations,
 			const float* cov3D_precomp,
+			const int* metric_map,
 			const float* viewmatrix,
 			const float* projmatrix,
 			const float* cam_pos,
@@ -56,7 +57,9 @@ namespace CudaRasterizer
 			bool antialiasing,
 			bool pruning,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			bool get_flag = false,
+			int* metricCount = nullptr);
 
 		static void backward(
 			const int P, int D, int M, int R, int B,

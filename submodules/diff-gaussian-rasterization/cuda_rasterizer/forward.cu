@@ -294,7 +294,10 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	const float* __restrict__ depths,
-	float* __restrict__ invdepth)
+	float* __restrict__ invdepth,
+	const int* __restrict__ metric_map,
+	bool get_flag,
+	int* __restrict__ metricCount)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -304,6 +307,10 @@ renderCUDA(
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
 	float2 pixf = { (float)pix.x, (float)pix.y };
+
+	bool update_score = false;
+	if (get_flag)
+		update_score = metric_map[pix_id] == 1;
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W&& pix.y < H;
@@ -402,6 +409,13 @@ renderCUDA(
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * alpha * T;
 
 			expected_invdepth += (1.f / depths[collected_id[j]]) * alpha * T;
+			if(get_flag)
+			{
+				if(update_score)
+	            {
+		            atomicAdd(&(metricCount[collected_id[j]]), 1);
+	            }
+			}
 			// expected_invdepth += (depths[collected_id[j]]) * alpha * T;
 
 			T = test_T;
@@ -449,7 +463,10 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
 	float* depths,
-	float* depth)
+	float* depth,
+	const int* metric_map,
+	bool get_flag,
+	int* metricCount)
 {
 	renderCUDA<NUM_CHANNELS_3DGS> << <grid, block >> > (
 		ranges,
@@ -466,7 +483,10 @@ void FORWARD::render(
 		bg_color,
 		out_color,
 		depths,
-		depth);
+		depth,
+		metric_map,
+		get_flag,
+		metricCount);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
