@@ -1,5 +1,3 @@
-
-
 import torch
 from functools import reduce
 import numpy as np

@@ -80,22 +80,18 @@ Directory layout example:
         ├── sparse/0
         └── train_test_split.json
 ```
-
+All evaluation runs during training. Please refer to `metrics.json` for the final time metrics and PSNR metrics.
 
 ## 1.Evaluation
-
 Although evaluation runs during training, we also provide a unified evaluation script.
 
 Use `.vscode/full_eval.sh` and edit:
 
 `DATA_PATH` → root directory containing all 13 scenes
 
-`EVALUATE_DIR` and `NAME` → the same values you used in the training script
+`EVALUATE_DIR` and `NAME` and training parameters → the same values you used in the training script
+
 ```
 chmod +x .vscode/full_eval.sh
 .vscode/full_eval.sh
 ```
-Please refer to `metrics.json` for the final time metrics, and `metrics_PSNR.json` for the rendering metrics.
-
-
-
