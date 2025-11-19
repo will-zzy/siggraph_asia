@@ -127,11 +127,10 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     if is_training:
         return xyz, color, opacity, scaling, rot, neural_opacity_flat, mask
     else:
-        return xyz, color, opacity, scaling, rot
-    
-    
-def render(viewpoint_camera, 
-           pc : GaussianModel, 
+        return xyz, color, opacity, scaling, rot, mask
+def render_with_predefined_neural_gaussian(
+           xyz, color, opacity, scaling, rot,
+           viewpoint_camera, 
            pipe, bg_color : torch.Tensor, 
            scaling_modifier = 1.0, 
            separate_sh = False, 
@@ -141,21 +140,17 @@ def render(viewpoint_camera,
            visible_mask=None, 
            retain_grad=False,
            cam_rot_delta=None,
-           cam_trans_delta=None
-           ):
+           cam_trans_delta=None,
+           get_flag=False, # 是否传入metric_map，对高斯计数
+           metric_map=None
+    ):
     """
     Render the scene. 
     
     Background tensor (bg_color) must be on GPU!
     """
-    # is_training = pc.get_big_head.training
-    is_training = pc.get_color_mlp.training
         
-    if is_training:
-        xyz, color, opacity, scaling, rot, neural_opacity, mask = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
-    else:
-        xyz, color, opacity, scaling, rot = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
-    screenspace_points = torch.zeros_like(xyz, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points = torch.zeros_like(xyz, dtype=xyz.dtype, requires_grad=False, device="cuda") + 0
     if retain_grad:
         try:
             screenspace_points.retain_grad()
@@ -182,7 +177,132 @@ def render(viewpoint_camera,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=pipe.antialiasing
+        antialiasing=pipe.antialiasing,
+        get_flag=get_flag,
+        metric_map=metric_map
+    )
+
+    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
+
+    # means3D = pc.get_xyz
+    # means2D = screenspace_points
+    # opacity = pc.get_opacity
+
+    # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
+    # scaling / rotation by the rasterizer.
+    scales = scaling
+    rotations = rot
+    
+    if separate_sh:
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
+            means3D = xyz,
+            means2D = screenspace_points,
+            # dc = dc,
+            # shs = shs,
+            dc = None,
+            shs = None,
+            # colors_precomp = colors_precomp,
+            colors_precomp = color,
+            opacities = opacity,
+            scales = scales,
+            rotations = rotations,
+            cov3D_precomp = None,
+            theta=cam_rot_delta,
+            rho=cam_trans_delta)
+    else:
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
+            means3D = xyz,
+            means2D = screenspace_points,
+            # shs = shs,
+            # colors_precomp = colors_precomp,
+            shs = None,
+            colors_precomp = color,
+            opacities = opacity,
+            scales = scales,
+            rotations = rotations,
+            cov3D_precomp = None,
+            theta=cam_rot_delta,
+            rho=cam_trans_delta)
+        
+    # Apply exposure to rendered image (training only)
+    # if use_trained_exp:
+    #     exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
+    #     rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
+
+    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
+    # They will be excluded from value updates used in the splitting criteria.
+    rendered_image = rendered_image.clamp(0, 1)
+    out = {
+        "render": rendered_image,
+        "viewspace_points": screenspace_points,
+        "visibility_filter" : (radii > 0),
+        "radii": radii,
+        "scaling": scaling,
+        "depth" : depth_image,
+        "accum_metric_counts": accum_metric_counts
+        }
+    
+    return out
+
+    
+    
+def render(viewpoint_camera, 
+           pc : GaussianModel, 
+           pipe, bg_color : torch.Tensor, 
+           scaling_modifier = 1.0, 
+           separate_sh = False, 
+           override_color = None, # 恒为none，但scaffold-gs会直接从网络中算出来
+           use_trained_exp=False, 
+           render_size=None, 
+           visible_mask=None, 
+           retain_grad=False,
+           cam_rot_delta=None,
+           cam_trans_delta=None,
+           get_flag=False, # 是否传入metric_map，对高斯计数
+           metric_map=None
+           ):
+    """
+    Render the scene. 
+    
+    Background tensor (bg_color) must be on GPU!
+    """
+    # is_training = pc.get_big_head.training
+    is_training = pc.get_color_mlp.training
+        
+    if is_training:
+        xyz, color, opacity, scaling, rot, neural_opacity, mask = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+    else:
+        xyz, color, opacity, scaling, rot, mask = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+    screenspace_points = torch.zeros([xyz.shape[0],int(2*xyz.shape[1])], dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
+    if retain_grad:
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
+
+
+    # Set up rasterization configuration
+    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
+    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
+
+    raster_settings = GaussianRasterizationSettings(
+        image_height=int(viewpoint_camera.image_height) if render_size is None else render_size[0],
+        image_width=int(viewpoint_camera.image_width) if render_size is None else render_size[1],
+        tanfovx=tanfovx,
+        tanfovy=tanfovy,
+        bg=bg_color,
+        scale_modifier=scaling_modifier,
+        viewmatrix=viewpoint_camera.world_view_transform,
+        projmatrix=viewpoint_camera.full_proj_transform,
+        projmatrix_raw=viewpoint_camera.projection_matrix,
+        # sh_degree=pc.active_sh_degree,
+        sh_degree=1, # 可以不用球谐
+        campos=viewpoint_camera.camera_center,
+        prefiltered=False,
+        debug=pipe.debug,
+        antialiasing=pipe.antialiasing,
+        get_flag=get_flag,
+        metric_map=metric_map
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -203,29 +323,8 @@ def render(viewpoint_camera,
         scales = scaling
         rotations = rot
 
-    # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
-    # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
-    # shs = None
-    # colors_precomp = None
-    # if override_color is None:
-    #     if pipe.convert_SHs_python:
-    #         shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-    #         dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-    #         dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-    #         sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-    #         colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-    #     else:
-    #         if separate_sh:
-    #             dc, shs = pc.get_features_dc, pc.get_features_rest
-    #         else:
-    #             shs = pc.get_features
-    # else:
-    #     colors_precomp = override_color
-
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
             means3D = xyz,
             means2D = screenspace_points,
             # dc = dc,
@@ -241,7 +340,7 @@ def render(viewpoint_camera,
             theta=cam_rot_delta,
             rho=cam_trans_delta)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
             means3D = xyz,
             means2D = screenspace_points,
             # shs = shs,
@@ -315,7 +414,9 @@ def prefilter_voxel(viewpoint_camera,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=True
+        antialiasing=True,
+        get_flag=False,
+        metric_map=None
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)

@@ -138,6 +138,9 @@ class OptimizationParams(ParamGroup):
         self.lambda_dssim = 0.2
         self.densification_interval = 100
         
+        # fastgs
+        self.loss_thresh = 0.1
+        
         # for anchor densification
         self.start_stat = 500
         self.update_from = 1500

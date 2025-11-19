@@ -49,7 +49,7 @@ std::function<float*(size_t N)> resizeFloatFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
@@ -59,6 +59,7 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& rotations,
 	const float scale_modifier,
 	const torch::Tensor& cov3D_precomp,
+	const torch::Tensor& metric_map,
 	const torch::Tensor& viewmatrix,
 	const torch::Tensor& projmatrix,
     const torch::Tensor& projmatrix_raw,
@@ -73,7 +74,8 @@ RasterizeGaussiansCUDA(
 	const bool prefiltered,
 	const bool antialiasing,
 	const bool pruning,
-	const bool debug)
+	const bool debug,
+	const bool get_flag)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
     AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -102,6 +104,18 @@ RasterizeGaussiansCUDA(
   std::function<char*(size_t)> imgFunc = resizeFunctional(imgBuffer);
   std::function<char*(size_t)> sampleFunc = resizeFunctional(sampleBuffer);
   
+  int* accum_metric_counts_ptr = nullptr;
+
+  torch::Tensor metricCount = torch::empty({0}, int_opts);
+
+  if(get_flag)
+  {
+	metricCount = torch::full({P}, 0, int_opts);
+	accum_metric_counts_ptr = metricCount.contiguous().data<int>();
+  }
+
+
+
   int rendered = 0;
   int num_buckets = 0;
   if(P != 0)
@@ -129,6 +143,7 @@ RasterizeGaussiansCUDA(
 		scale_modifier,
 		rotations.contiguous().data_ptr<float>(),
 		cov3D_precomp.contiguous().data<float>(), 
+		metric_map.contiguous().data<int>(), 
 		viewmatrix.contiguous().data<float>(), 
 		projmatrix.contiguous().data<float>(),
 		campos.contiguous().data<float>(),
@@ -141,12 +156,14 @@ RasterizeGaussiansCUDA(
 		antialiasing,
 		pruning,
 		radii.contiguous().data<int>(),
-		debug);
+		debug,
+		get_flag,
+		accum_metric_counts_ptr);
 		
 		rendered = std::get<0>(tup);
 		num_buckets = std::get<1>(tup);
   }
-  return std::make_tuple(rendered, num_buckets, out_color, out_invdepth, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer);
+  return std::make_tuple(rendered, num_buckets, out_color, out_invdepth, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer, metricCount);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>

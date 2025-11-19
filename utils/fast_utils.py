@@ -5,9 +5,16 @@
 
 from .loss_utils import l1_loss
 from fused_ssim import fused_ssim as fast_ssim
-from gaussian_renderer import render
+from gaussian_renderer import render, prefilter_voxel, generate_neural_gaussians, render_with_predefined_neural_gaussian
 import torch
 import random
+# from train_dash import SPARSE_ADAM_AVAILABLE
+
+try:
+    from diff_gaussian_rasterization import SparseGaussianAdam
+    SPARSE_ADAM_AVAILABLE = True
+except:
+    SPARSE_ADAM_AVAILABLE = False
 
 def compute_photometric_loss(viewpoint_cam, image):
     gt_image = viewpoint_cam.original_image.cuda()
@@ -16,6 +23,16 @@ def compute_photometric_loss(viewpoint_cam, image):
     return loss
 
 
+def sampling_cameras(my_viewpoint_stack):
+    ''' Randomly sample a given number of cameras from the viewpoint stack'''
+
+    num_cams = 10
+    camlist = []
+    for _ in range(num_cams):
+        loc = random.randint(0, len(my_viewpoint_stack) - 1)
+        camlist.append(my_viewpoint_stack.pop(loc))
+    
+    return camlist
 
 
 def get_loss(reconstructed_image, original_image):
@@ -47,6 +64,7 @@ def sampling_cameras(my_viewpoint_stack):
     return camlist
 
 def compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, args, DENSIFY = False):
+    
     """Compute multi-view consistency scores for Gaussians to guide densification.
 
     For each camera in `camlist` the function renders the scene and computes a
@@ -71,34 +89,53 @@ def compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, args, DENSIFY = 
             prioritize densification (higher means worse reconstruction consistency).
     """
 
-    full_metric_counts = None
-    full_metric_score = None
-    
-    for view in range(len(camlist)):
-        my_viewpoint_cam = camlist[view]
-        render_image = render_fastgs(my_viewpoint_cam, gaussians, pipe, bg, args.mult)["render"]
-        photometric_loss = compute_photometric_loss(my_viewpoint_cam, render_image)
 
-        gt_image = my_viewpoint_cam.original_image.cuda()
+    # for view in range(len(camlist)):
+    #     view = camlist[view]
+    #     voxel_visible_mask = torch.logical_or(voxel_visible_mask, prefilter_voxel(view, gaussians, pipe, background=bg))
+    num_points = gaussians.get_anchor.shape[0] * gaussians.n_offsets
+    full_metric_counts = torch.zeros((num_points), dtype=torch.int32, device=gaussians.get_anchor.device)
+    full_metric_score = torch.zeros((num_points), dtype=torch.float32, device=gaussians.get_anchor.device)
+    for view in range(len(camlist)):
+        view_cam = camlist[view]
+        voxel_visible_mask = prefilter_voxel(view_cam, gaussians, pipe, bg_color=bg)
+        xyz, color, opacity, scaling, rot, mask = generate_neural_gaussians(view_cam, gaussians, voxel_visible_mask, False)
+        pts_visible_mask = voxel_visible_mask.repeat_interleave(gaussians.n_offsets, dim=0)
+        gt_image = view_cam.original_image.cuda()
+        render_pkg = render_with_predefined_neural_gaussian(xyz, color, opacity, scaling, rot, view_cam, pipe, bg, \
+                separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], \
+                retain_grad=False, cam_rot_delta=None, cam_trans_delta=None) # 计算分数时，rot和trans不需要梯度
+        
+        # render_image = render_fastgs(view_cam, gaussians, pipe, bg, args.mult)["render"]
+        render_image = render_pkg["render"]
+        photometric_loss = compute_photometric_loss(view_cam, render_image)
+
         get_flag = True
         l1_loss_norm = get_loss(render_image, gt_image)
         
         metric_map = (l1_loss_norm > args.loss_thresh).int()
 
-        render_pkg = render_fastgs(my_viewpoint_cam, gaussians, pipe, bg, args.mult, get_flag = get_flag, metric_map = metric_map)
-
+        render_pkg = render_with_predefined_neural_gaussian(xyz, color, opacity, scaling, rot, view_cam, pipe, bg, \
+                separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], \
+                retain_grad=False, cam_rot_delta=None, cam_trans_delta=None, \
+                get_flag=get_flag, metric_map=metric_map)
+        
         accum_loss_counts = render_pkg["accum_metric_counts"]
 
-        if DENSIFY:
-            if full_metric_counts is None:
-                full_metric_counts = accum_loss_counts.clone()
-            else:
-                full_metric_counts += accum_loss_counts
+        tmp_metric_counts = torch.zeros(mask.shape[0], dtype=torch.int32, device=gaussians.get_anchor.device)
+        tmp_metric_score = torch.zeros(mask.shape[0], dtype=torch.float32, device=gaussians.get_anchor.device)
+        tmp_metric_counts[mask] = accum_loss_counts
+        tmp_metric_score[mask] = photometric_loss * accum_loss_counts
+
+        if full_metric_counts is None:
+            full_metric_counts = accum_loss_counts.clone()
+        else:
+            full_metric_counts[pts_visible_mask] += tmp_metric_counts
 
         if full_metric_score is None:
             full_metric_score = photometric_loss * accum_loss_counts.clone()
         else:
-            full_metric_score += photometric_loss * accum_loss_counts
+            full_metric_score[pts_visible_mask] += tmp_metric_score
 
     pruning_score = (full_metric_score - torch.min(full_metric_score)) / (torch.max(full_metric_score) - torch.min(full_metric_score))
     

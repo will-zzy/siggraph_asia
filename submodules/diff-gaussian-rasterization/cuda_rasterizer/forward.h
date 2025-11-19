@@ -67,7 +67,10 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color,
 		float* depths,
-		float* depth);
+		float* depth,
+		const int* metric_map,
+		bool get_flag,
+		int* metricCount);
 	void filter_preprocess(int P, int M,
 		const float* means3D,
 		const glm::vec3* scales,

@@ -29,7 +29,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from utils.schedule_utils import TrainingScheduler
 from utils.robotic_utils import sh_rotation, matrix_to_quaternion, quaternion_to_matrix, load_ply, save_ply
-
+from utils.fast_utils import sampling_cameras, compute_gaussian_score_fastgs
 
 import cv2
 import csv
@@ -348,7 +348,25 @@ def anySplat(dataset, opt, pipe):
     SFM_pts_file = os.path.join(dataset.source_path, "sparse/0", "points3D.txt")
     
     cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
-    xyz, rgb, _ = read_points3D_text(SFM_pts_file) # 来着colmap的点
+    xyz, rgb, errors = read_points3D_text(SFM_pts_file) # 来着colmap的点
+    def select_k_smallest_errors(xyz, rgb, errors, k):
+        xyz = np.asarray(xyz)
+        rgb = np.asarray(rgb)
+        errors = np.asarray(errors)
+        valid = np.isfinite(errors)
+        if not valid.any():
+            raise ValueError("No valid errors to select from.")
+        valid = valid.reshape(-1)
+        xyz_v, rgb_v, err_v = xyz[valid], rgb[valid], errors[valid]
+
+        k = min(int(k), err_v.shape[0])
+        err_v = err_v.reshape(-1)
+        idx_part = np.argpartition(err_v, kth=k-1)[:k]
+        order = np.argsort(err_v[idx_part])
+        idx_k = idx_part[order]
+
+        return xyz_v[idx_k], rgb_v[idx_k], err_v[idx_k], np.flatnonzero(valid)[idx_k]
+    xyz, rgb, errors, selected_idx = select_k_smallest_errors(xyz, rgb, errors, 10000)
     imgs = []
     cams_unsorted = []
     for idx, key in enumerate(cam_extrinsics):
@@ -758,13 +776,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
 
-        # with torch.no_grad():
-        #     if iteration % 200 == 0:
-        #         image_write = image.permute(1,2,0).detach().cpu().numpy()
-        #         image_write = (image_write * 255).astype("uint8")
-        #         os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-        #         cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
-        #         print(global_transform)
+        with torch.no_grad():
+            if iteration % 200 == 0 and iteration > opt.update_from:
+                image_write = image.permute(1,2,0).detach().cpu().numpy()
+                image_write = (image_write * 255).astype("uint8")
+                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+                # print(global_transform)
         
         
         
@@ -785,34 +803,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
-
-            # Log and save
-            ########## TODO 是否要删除test视角渲染？
-            # iter_time = iter_start.elapsed_time(iter_end)
-            # training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_time, testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
-            # if (iteration in saving_iterations):
-            #     print("\n[ITER {}] Saving Gaussians".format(iteration))
-            #     scene.save(iteration)
-            ##########
                 
             #  检查时间计数器，30秒和60秒时保存结果
             elapsed_time = time.time() - start_time
             case_name = dataset.source_path.split('/')[-1]
-            # if elapsed_time >= 30 and 30 in time_save_iterations:
-            #     eval_start_time = time.time()
-            #     print(f"\n[ITER {iteration}] Evaluating Gaussians at 30 seconds")
-            #     eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 30, log_file, global_transform)
-            #     eval_time = time.time() - eval_start_time
-            #     time_save_iterations.remove(30)  # 移除已保存的时间点，避免重复保存
-            # elif (eval_time != None and elapsed_time - eval_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
-            #     print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
-            #     all_time = elapsed_time - eval_time
-            #     eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
-            #     scene.save(iteration)
-            #     time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
-            #     # 到60秒后退出训练
-                
-            #     sys.exit(0)
+            
             if (elapsed_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
                 all_time = elapsed_time
@@ -830,29 +825,34 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration < opt.densify_until_iter and iteration > opt.start_stat and (gaussians._scaling.shape[0] * dataset.n_offsets) < pipe.max_n_gaussian:
                     # Keep track of max radii in image-space for pruning
                     gaussians.training_statis(viewspace_point_tensor, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
-                    # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                    # gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                    
+                    
                     if iteration > opt.update_from and iteration % opt.update_interval == 0:
-                        gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
-                    # if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
-                    #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    #     # Apply DashGaussian primitive scheduler to control densification.
-                    #     densify_rate = scheduler.get_densify_rate(iteration, gaussians.get_anchor.shape[0], render_scale)
-                    #     momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
-                    #                                                size_threshold, radii, densify_rate=densify_rate)
-                    #     # Update max_n_gaussian
-                    #     scheduler.update_momentum(momentum_add)
-                    #     # Update render scale based on the DashGaussian resolution scheduler. 
-                    #     render_scale = scheduler.get_res_scale(iteration)
-
-                    # if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
-                    #     gaussians.reset_opacity()
+                        
+                        sample_viewpoint_stack = scene.getTrainCameras().copy()
+                        camlist = sampling_cameras(sample_viewpoint_stack)
+                        importance_score, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, opt, DENSIFY=True)                    
+                        # [N_gaussians, 1] 每个高斯的分裂分数和裁剪分数
+                        # gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
+                        gaussians.adjust_anchor_mv_score(opt.min_opacity, importance_score, pruning_score,
+                                                         check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold)
+                    
                 elif iteration == opt.update_until:
                     del gaussians.opacity_accum
                     del gaussians.offset_gradient_accum
                     del gaussians.offset_denom
                     torch.cuda.empty_cache()
+                # prune, maybe don't need
+                # if iteration % 1000 == 0 and iteration > 3000:
+                #     sample_viewpoint_stack = scene.getTrainCameras().copy()
+                #     camlist = sampling_cameras(sample_viewpoint_stack)
 
+                #     _, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, opt)                    
+                #     gaussians.final_prune_fastgs(min_opacity = 0.1, pruning_score = pruning_score)
+                
+                
+                
+                
                 # Optimizer step
                 if iteration < opt.iterations:
                     # gaussians.exposure_optimizer.step()

@@ -93,7 +93,14 @@ class _RasterizeGaussians(torch.autograd.Function):
     ):
 
         # Restructure arguments the way that the C++ lib expects them
+        get_flag = raster_settings.get_flag
+        if get_flag == None:
+            get_flag = False
         
+        if raster_settings.metric_map is None:
+            metric_map = torch.Tensor([]).to(torch.int32)
+        else:
+            metric_map = raster_settings.metric_map
         args = (
             raster_settings.bg, 
             means3D,
@@ -103,6 +110,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             rotations,
             raster_settings.scale_modifier,
             cov3Ds_precomp,
+            metric_map,
             raster_settings.viewmatrix,
             raster_settings.projmatrix,
             raster_settings.projmatrix_raw,
@@ -117,7 +125,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.prefiltered,
             raster_settings.antialiasing,
             False,
-            raster_settings.debug
+            raster_settings.debug,
+            get_flag
         )
 
         # Invoke C++/CUDA rasterizer
@@ -130,17 +139,17 @@ class _RasterizeGaussians(torch.autograd.Function):
                 print("\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
                 raise ex
         else:
-            num_rendered, num_buckets, color, invdepths, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer = _C.rasterize_gaussians(*args)
+            num_rendered, num_buckets, color, invdepths, radii, geomBuffer, binningBuffer, imgBuffer, sampleBuffer, accum_metric_counts= _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.num_buckets = num_buckets
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, dc, sh, opacities, geomBuffer, binningBuffer, imgBuffer, sampleBuffer)
-        return color, radii, invdepths
+        return color, radii, invdepths, accum_metric_counts
 
     @staticmethod
-    def backward(ctx, grad_out_color, _, grad_out_depth):
+    def backward(ctx, grad_out_color, _, grad_out_depth, grad_out_metric_counts):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
@@ -194,10 +203,11 @@ class _RasterizeGaussians(torch.autograd.Function):
         grad_tau = torch.sum(grad_tau.view(-1, 6), dim=0)
         grad_rho = grad_tau[:3].view(1, -1)
         grad_theta = grad_tau[3:].view(1, -1)
-        
+        grad_2d = torch.cat([grad_means2D, grad_means2D_abs], dim=1)
         grads = (
             grad_means3D,
-            grad_means2D_abs,
+            grad_2d,
+            # grad_means2D_abs,
             # grad_means2D,
             grad_dc,
             grad_sh,
@@ -287,6 +297,8 @@ class GaussianRasterizationSettings(NamedTuple):
     prefiltered : bool
     debug : bool
     antialiasing : bool
+    get_flag : bool
+    metric_map : torch.Tensor
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):
@@ -331,6 +343,7 @@ class GaussianRasterizer(nn.Module):
             theta = torch.Tensor([])
         if rho is None:
             rho = torch.Tensor([])
+        
 
         # Invoke C++/CUDA rasterization routine
         return rasterize_gaussians(

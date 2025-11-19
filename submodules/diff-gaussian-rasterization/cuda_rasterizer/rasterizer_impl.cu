@@ -476,6 +476,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	const float scale_modifier,
 	const float* rotations,
 	const float* cov3D_precomp,
+	const int* metric_map,
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* cam_pos,
@@ -487,7 +488,9 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	bool antialiasing,
 	const bool pruning,
 	int* radii,
-	bool debug)
+	bool debug,
+	bool get_flag,
+	int* metricCount)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -637,7 +640,10 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
 		geomState.depths,
-		invdepth), debug)
+		invdepth,
+		metric_map,
+		get_flag,
+		metricCount), debug)
 
 	KSYNC("renderCUDA");
 	CHECK_CUDA(cudaMemcpy(imgState.pixel_colors, out_color, sizeof(float) * width * height * NUM_CHANNELS_3DGS, cudaMemcpyDeviceToDevice), debug);

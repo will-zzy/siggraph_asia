@@ -101,6 +101,7 @@ class GaussianModel:
         
         # 
         self.offset_gradient_accum = torch.empty(0)
+        self.offset_gradient_abs_accum = torch.empty(0)
         self.offset_denom = torch.empty(0)
         
         self.anchor_demon = torch.empty(0) # 锚点是否需要分裂
@@ -422,6 +423,7 @@ class GaussianModel:
         self.opacity_accum = torch.zeros((self.get_anchor.shape[0], 1), device="cuda")
 
         self.offset_gradient_accum = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
+        self.offset_gradient_abs_accum = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
         self.offset_denom = torch.zeros((self.get_anchor.shape[0]*self.n_offsets, 1), device="cuda")
         self.anchor_demon = torch.zeros((self.get_anchor.shape[0], 1), device="cuda")
         
@@ -736,6 +738,8 @@ class GaussianModel:
     def training_statis(self, viewspace_point_tensor, opacity, update_filter, offset_selection_mask, anchor_visible_mask):
         # update opacity stats
         # offset_selection_mask 为先经过visible_mask后，每个anchor经过opacity mlp输出的opacity大于0的mask
+        # anchor_visible_mask 为prefilter_voxel_mask
+        # update_filter为radii>0的mask
         temp_opacity = opacity.clone().view(-1).detach()
         temp_opacity[temp_opacity<0] = 0
         
@@ -754,6 +758,8 @@ class GaussianModel:
         
         grad_norm = torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.offset_gradient_accum[combined_mask] += grad_norm # 每个anchor根据维护gradient accumlate来决定其是否要growing
+        # grad_abs_norm = torch.norm(viewspace_point_tensor.grad[update_filter,2:], dim=-1, keepdim=True)
+        # self.offset_gradient_abs_accum[combined_mask] += grad_abs_norm
         self.offset_denom[combined_mask] += 1 # 当gaussian opacity>0且可见，当前轮的anchor才更新梯度表
 
         
@@ -809,7 +815,7 @@ class GaussianModel:
 
     
     def anchor_growing(self, grads, threshold, offset_mask):
-        ## 
+        ## offset_mask是观测了100 * 0.8 * 0.5以上次数的anchor, [anchors * offsets]
         init_length = self.get_anchor.shape[0]*self.n_offsets
         for i in range(self.update_depth):
             # update threshold
@@ -824,10 +830,10 @@ class GaussianModel:
             candidate_mask = torch.logical_and(candidate_mask, rand_mask)
             
             length_inc = self.get_anchor.shape[0]*self.n_offsets - init_length
-            if length_inc == 0:
+            if length_inc == 0: #
                 if i > 0:
                     continue
-            else:
+            else: # 前面新加入了anchor，length_inc不为0，则candidate_mask要补齐后面新加的
                 candidate_mask = torch.cat([candidate_mask, torch.zeros(length_inc, dtype=torch.bool, device='cuda')], dim=0)
 
             all_xyz = self.get_anchor.unsqueeze(dim=1) + self._offset * self.get_scaling[:,:3].unsqueeze(dim=1) # splat的位置
@@ -839,7 +845,7 @@ class GaussianModel:
             
             grid_coords = torch.round(self.get_anchor / cur_size).int()
 
-            selected_xyz = all_xyz.view([-1, 3])[candidate_mask]
+            selected_xyz = all_xyz.view([-1, 3])[candidate_mask] # 仅通过梯度是否大于阈值来判断是否要growing
             selected_grid_coords = torch.round(selected_xyz / cur_size).int()
 
             selected_grid_coords_unique, inverse_indices = torch.unique(selected_grid_coords, return_inverse=True, dim=0)
@@ -847,11 +853,11 @@ class GaussianModel:
 
             ## split data for reducing peak memory calling
             use_chunk = True
-            if use_chunk:
-                chunk_size = 4096
+            if use_chunk: # 遍历所有的anchor点，如果选中的splat和已有的anchor在体素坐标上重合，则这个选中的splat不growing成anchor
+                chunk_size = 4096 * 16
                 max_iters = grid_coords.shape[0] // chunk_size + (1 if grid_coords.shape[0] % chunk_size != 0 else 0)
                 remove_duplicates_list = []
-                for i in range(max_iters): # 选出splat和anchor的grid coordinate相同的并去除（已有的anchor不用再加了）
+                for i in range(max_iters):
                     cur_remove_duplicates = (selected_grid_coords_unique.unsqueeze(1) == grid_coords[i*chunk_size:(i+1)*chunk_size, :]).all(-1).any(-1).view(-1)
                     remove_duplicates_list.append(cur_remove_duplicates)
                 
@@ -864,6 +870,10 @@ class GaussianModel:
 
             
             if candidate_anchor.shape[0] > 0:
+                # 这里是clone candidate_anchor的feature，scale初始化为体素大小
+                # rotation初始化为单位四元数
+                # opacity初始化为0.1
+                # offset初始化为0
                 new_scaling = torch.ones_like(candidate_anchor).repeat([1,2]).float().cuda()*cur_size # *0.05
                 new_scaling = torch.log(new_scaling)
                 new_rotation = torch.zeros([candidate_anchor.shape[0], 4], device=candidate_anchor.device).float()
@@ -906,16 +916,121 @@ class GaussianModel:
                 self._opacity = optimizable_tensors["opacity"]
                 
 
+    def adjust_anchor_mv_score(self, min_opacity, importance_score, pruning_score,
+                               check_interval=100, success_threshold=0.8, grad_threshold=0.0002, scheduler=None):
+        
+        # grad_vars = self.offset_gradient_accum / self.offset_denom # [N*k, 1]
+        # grad_vars[grad_vars.isnan()] = 0.0
+        
+        # grads_abs = self.offset_gradient_abs_accum / self.denom
+        # grads_abs[grads_abs.isnan()] = 0.0
+        
+        # grad_qualifiers = torch.where(torch.norm(grad_vars, dim=-1) >= args.grad_thresh, True, False)
+        # grad_qualifiers_abs = torch.where(torch.norm(grads_abs, dim=-1) >= args.grad_abs_thresh, True, False)
+        # clone_qualifiers = torch.max(self.get_scaling, dim=1).values <= args.dense*extent
+        # split_qualifiers = torch.max(self.get_scaling, dim=1).values > args.dense*extent
+
+        # all_clones = torch.logical_and(clone_qualifiers, grad_qualifiers) # 尺度小的clone，尺度大的split
+        # all_splits = torch.logical_and(split_qualifiers, grad_qualifiers_abs)
+        
+        metric_mask = importance_score > 5
+        # K = 4000 
+        # def keep_k_true_multinomial(mask: torch.Tensor, k: int) -> torch.Tensor:
+        #     mask = mask.bool()
+        #     n_true = int(mask.sum())
+        #     if n_true <= k:
+        #         return mask.clone()
+        #     if n_true == 0 or k <= 0:
+        #         return torch.zeros_like(mask, dtype=torch.bool)
+
+        #     # sample indices uniformly among True positions (no replacement)
+        #     probs = mask.float().view(-1)
+        #     choose = torch.multinomial(probs, k, replacement=False)
+
+        #     out = torch.zeros_like(probs, dtype=torch.bool)
+        #     out[choose] = True
+        #     return out.view_as(mask)
+        
+        # metric_mask = keep_k_true_multinomial(metric_mask, K)
         
         
         
+        vals, idx = torch.topk(importance_score, 1000)     # O(n log k)
+        out = torch.zeros_like(importance_score)
+        out[idx] = vals  
+        metric_mask = out > 0.0
         
-                # self._anchor = optimizable_tensors["anchor"]
-                # self._scaling = optimizable_tensors["scaling"]
-                # self._rotation = optimizable_tensors["rotation"]
-                # self._anchor_feat = optimizable_tensors["anchor_feat"]
-                # self._offset = optimizable_tensors["offset"]
-                # self._opacity = optimizable_tensors["opacity"]
+        offset_mask = (self.offset_denom > check_interval * success_threshold * 0.5).squeeze(dim=1) # 观测次数大于100 * 0.8 * 0.5的splat
+        offset_mask = torch.ones_like(offset_mask)
+        self.anchor_growing(metric_mask.float(), 0.01, offset_mask)
+        
+        # update offset_denom
+        self.offset_denom[offset_mask] = 0
+        padding_offset_demon = torch.zeros([self.get_anchor.shape[0]*self.n_offsets - self.offset_denom.shape[0], 1],
+                                           dtype=torch.int32, 
+                                           device=self.offset_denom.device)
+        self.offset_denom = torch.cat([self.offset_denom, padding_offset_demon], dim=0)
+
+        self.offset_gradient_accum[offset_mask] = 0
+        # self.offset_gradient_abs_accum[offset_mask] = 0
+        padding_offset_gradient_accum = torch.zeros([self.get_anchor.shape[0]*self.n_offsets - self.offset_gradient_accum.shape[0], 1],
+                                           dtype=torch.int32, 
+                                           device=self.offset_gradient_accum.device)
+        self.offset_gradient_accum = torch.cat([self.offset_gradient_accum, padding_offset_gradient_accum], dim=0)
+        # self.offset_gradient_abs_accum = torch.cat([self.offset_gradient_accum, padding_offset_gradient_accum], dim=0)
+        
+        # prune anchors 
+        # 先根据平均不透明度确定旧anchor是否要删掉
+        prune_mask = (self.opacity_accum < min_opacity*self.anchor_demon).squeeze(dim=1)
+        anchors_mask = (self.anchor_demon > check_interval * success_threshold).squeeze(dim=1) # [N, 1]
+        prune_mask = torch.logical_and(prune_mask, anchors_mask) # [N] 
+        
+        scores = 1 - pruning_score 
+        to_remove = torch.sum(prune_mask) # 总共需要删掉的anchor数量
+        remove_budget = int(0.5 * to_remove)
+
+        if remove_budget: 
+            # 如果一个anchor中需要删除的高斯数目超过了百分之阈值，
+            # 则删除该anchor，或者将prune分数从splat聚合到anchor再删除anchor
+            n_init_points = self.get_anchor.shape[0] * self.n_offsets # densify后的高斯点数
+            padded_importance = torch.zeros((n_init_points), dtype=torch.float32)
+            padded_importance[:scores.shape[0]] = 1 / (1e-6 + scores.squeeze()) # 仅对前面原始anchor的高斯点进行采样
+            selected_pts_mask = torch.zeros_like(padded_importance, dtype=bool, device="cuda") 
+            sampled_indices = torch.multinomial(padded_importance, remove_budget, replacement=False)
+            selected_pts_mask[sampled_indices] = True
+            num_threshold = np.ceil(self.n_offsets * 0.3)
+            selected_anchor_mask = selected_pts_mask.view([-1, self.n_offsets]).sum(dim=1) >= num_threshold
+            prune_mask = torch.logical_and(prune_mask, selected_anchor_mask)
+            
+            
+        # update offset_denom
+        offset_denom = self.offset_denom.view([-1, self.n_offsets])[~prune_mask]
+        offset_denom = offset_denom.view([-1, 1])
+        del self.offset_denom
+        self.offset_denom = offset_denom
+
+        offset_gradient_accum = self.offset_gradient_accum.view([-1, self.n_offsets])[~prune_mask]
+        offset_gradient_accum = offset_gradient_accum.view([-1, 1])
+        del self.offset_gradient_accum
+        self.offset_gradient_accum = offset_gradient_accum
+        
+        # update opacity accum 
+        if anchors_mask.sum()>0:
+            self.opacity_accum[anchors_mask] = torch.zeros([anchors_mask.sum(), 1], device='cuda').float()
+            self.anchor_demon[anchors_mask] = torch.zeros([anchors_mask.sum(), 1], device='cuda').float()
+        
+        temp_opacity_accum = self.opacity_accum[~prune_mask]
+        del self.opacity_accum
+        self.opacity_accum = temp_opacity_accum
+
+        temp_anchor_demon = self.anchor_demon[~prune_mask]
+        del self.anchor_demon
+        self.anchor_demon = temp_anchor_demon
+
+        if prune_mask.shape[0]>0:    
+            self.prune_anchor(prune_mask)
+        
+        self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda")
 
     def adjust_anchor(self, check_interval=100, success_threshold=0.8, grad_threshold=0.0002, min_opacity=0.005, scheduler=None):
         # # adding anchors
@@ -940,8 +1055,9 @@ class GaussianModel:
         self.offset_gradient_accum = torch.cat([self.offset_gradient_accum, padding_offset_gradient_accum], dim=0)
         
         # # prune anchors
-        prune_mask = (self.opacity_accum < min_opacity*self.anchor_demon).squeeze(dim=1)
-        anchors_mask = (self.anchor_demon > check_interval * success_threshold).squeeze(dim=1) # [N, 1]
+        prune_mask = (self.opacity_accum < min_opacity*self.anchor_demon).squeeze(dim=1) # 平均不透明度小于阈值
+        anchors_mask = (self.anchor_demon > check_interval * success_threshold).squeeze(dim=1) # [N, 1] 
+        # prune掉观测达到一定次数，且累积不透明度小于阈值的anchor，采用了累计不透明度，就不用重置opacity了
         prune_mask = torch.logical_and(prune_mask, anchors_mask) # [N] 
         
         # update offset_denom
