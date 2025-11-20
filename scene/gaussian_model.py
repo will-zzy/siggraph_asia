@@ -1426,9 +1426,9 @@ class GaussianModel_origin:
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         l = [
-            {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
-            {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
-            {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
+            {'params': [self._xyz], 'lr': training_args.xyz_lr_init * self.spatial_lr_scale, "name": "xyz"},
+            {'params': [self._features_dc], 'lr': training_args.feature_dc_lr, "name": "f_dc"},
+            {'params': [self._features_rest], 'lr': training_args.feature_rest_lr, "name": "f_rest"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
@@ -1445,9 +1445,9 @@ class GaussianModel_origin:
 
         self.exposure_optimizer = torch.optim.Adam([self._exposure])
 
-        self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
-                                                    lr_final=training_args.position_lr_final*self.spatial_lr_scale,
-                                                    lr_delay_mult=training_args.position_lr_delay_mult,
+        self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.xyz_lr_init*self.spatial_lr_scale,
+                                                    lr_final=training_args.xyz_lr_final*self.spatial_lr_scale,
+                                                    lr_delay_mult=training_args.xyz_lr_delay_mult,
                                                     max_steps=training_args.position_lr_max_steps)
         
         # self.exposure_scheduler_args = get_expon_lr_func(training_args.exposure_lr_init, training_args.exposure_lr_final,

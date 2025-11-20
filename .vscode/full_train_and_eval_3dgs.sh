@@ -3,19 +3,19 @@
 # case=Truck
 
 CASES=(
-    1747834320424
-    1748153841908
-    1748165890960
-    1748242779841
-    1748243104741
-    1749449291156
-    1749606908096
-    1749803955124
+    # 1747834320424
+    # 1748153841908
+    # 1748165890960
+    # 1748242779841
+    # 1748243104741
+    # 1749449291156
+    # 1749606908096
+    # 1749803955124
     1750578027423
-    1750824904001
-    1750825558261
-    1750846199351
-    1751090600427
+    # 1750824904001
+    # 1750825558261
+    # 1750846199351
+    # 1751090600427
 )
 
 
@@ -47,20 +47,22 @@ feat_dim=64
 n_offsets=10 # 每个anchor的子高斯数
 
 densify_until_iter=4500
-update_from=500
-densify_from_iter=$update_from
+densify_from_iter=500
+densification_interval=100
 update_until=$densify_until_iter
-update_interval=100
 # FF_downsample=100000 # 对anySplat的点下采样倍数，用于充当anchor
-FF_downsample=10000 # 对anySplat的点下采样倍数，用于充当anchor
+FF_downsample=16 # 对anySplat的点下采样倍数，用于充当anchor
 
 
-MLP_OPACITY_LR_INIT=0.005 # 0.002
-MLP_COV_LR_INIT=0.003 # 0.004
-MLP_COLOR_LR_INIT=0.012 # 0.008
-FEATURE_LR_INIT=0.01 # 0.0075
-OFFSET_LR_INIT=0.01 # 0.01
-MAX_N_GAUSSIAN=3000000
+opacity_lr=0.02 # 0.02
+scaling_lr=0.007 # 0.007
+rotation_lr=0.002 # 0.008
+feature_dc_lr=0.0025 # 0.0025
+feature_rest_lr=0.005 # 0.005
+xyz_lr_init=0.00016
+xyz_lr_final=0.000016
+max_n_gaussian=3000000
+iterations=10000
 
 
 
@@ -103,25 +105,23 @@ for case in "${CASES[@]}"; do
         --disable_viewer \
         --antialiasing \
         --optimizer_type sparse_adam \
-        --voxel_size $voxel_size \
-        --update_init_factor $update_init_factor \
-        --appearance_dim $appearance_dim \
         --densify_grad_threshold $densify_grad_threshold \
         --densify_until_iter $densify_until_iter \
         --densify_from_iter $densify_from_iter \
-        --update_interval $update_interval \
-        --update_from $update_from \
-        --update_until $update_until \
-        --n_offsets $n_offsets \
+        --densification_interval $densification_interval \
+        --densify_until_iter $densify_until_iter \
         --FF_downsample $FF_downsample \
-        --feat_dim $feat_dim \
-        --mlp_opacity_lr_init $MLP_OPACITY_LR_INIT \
-        --mlp_cov_lr_init $MLP_COV_LR_INIT \
-        --mlp_color_lr_init $MLP_COLOR_LR_INIT \
-        --feature_lr $FEATURE_LR_INIT \
-        --offset_lr_init $OFFSET_LR_INIT \
+        --feature_dc_lr $feature_dc_lr \
+        --feature_rest_lr $feature_rest_lr \
+        --xyz_lr_init $xyz_lr_init \
+        --xyz_lr_final $xyz_lr_final \
+        --scaling_lr $scaling_lr \
+        --rotation_lr $rotation_lr \
+        --opacity_lr $opacity_lr \
         --images images_gt_downsampled \
         --log_file $LOG_FILE \
+        --max_n_gaussian $max_n_gaussian \
+        --iterations $iterations \
         --useFF 
         # --use_feat_bank true\
         # -m debugpy --wait-for-client --listen localhost:5685 \

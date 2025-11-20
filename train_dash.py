@@ -382,7 +382,7 @@ def anySplat(dataset, opt, pipe):
             image_path = os.path.join(os.path.dirname(images_dir), "images", extr.name)
         imgs.append(os.path.join(image_path))
         slam_c2ws.append(cam.pose[None])
-    interval = int(len(imgs) / 20) + 1 # 处理20张train
+    interval = int(len(imgs) / 40) + 1 # 处理40张train
     imgs = imgs[::interval]
     slam_c2ws = slam_c2ws[::interval]
     
@@ -401,7 +401,7 @@ def anySplat(dataset, opt, pipe):
     interval = pipe.FF_downsample
     gaussians = GaussianModel_origin(3, opt.optimizer_type)
     gaussians._xyz = gs.means[0, ::interval, ...]
-    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::interval, ...] * 0.3) # ff GS的scale太大了，要缩小一些
+    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::interval, ...] * 0.5) # ff GS的scale太大了，要缩小一些
     gaussians._opacity = gaussians.inverse_opacity_activation(gs.opacities[0, ::interval, ...][..., None])
     gaussians._rotation = gs.rotations[0, ::interval, ...]
     gaussians._features_dc = gs.harmonics[0, ::interval, :, :1].transpose(1, 2).contiguous()
