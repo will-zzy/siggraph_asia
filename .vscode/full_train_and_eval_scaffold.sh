@@ -3,19 +3,19 @@
 # case=Truck
 
 CASES=(
-    1747834320424
-    1748153841908
+    # 1747834320424
+    # 1748153841908
     1748165890960
-    1748242779841
-    1748243104741
-    1749449291156
-    1749606908096
-    1749803955124
-    1750578027423
-    1750824904001
-    1750825558261
-    1750846199351
-    1751090600427
+    # 1748242779841
+    # 1748243104741
+    # 1749449291156
+    # 1749606908096
+    # 1749803955124
+    # 1750578027423
+    # 1750824904001
+    # 1750825558261
+    # 1750846199351
+    # 1751090600427
 )
 
 
@@ -31,7 +31,7 @@ mono_depth(){
 }
 
 
-NAME=3DV_CASIA_catSfMPoints_2_poseAlign_depth_prior_FF48_densify5000
+NAME=3DV_CASIA
 BASE_DIR=/root/data/eval_data_pinhole
 EXP_DIR=/root/data/eval_data_pinhole/$NAME
 # case=1747834320424
@@ -88,7 +88,7 @@ for case in "${CASES[@]}"; do
     name=sig_GS_round2
     # name=sig_GS_R2_baseline
     model_dir=$EXP_DIR/$case
-    mono_depth $root_dir $model_dir
+    # mono_depth $root_dir $model_dir
 
     if [ -d "$model_dir/test" ]; then
         rm -r "$model_dir/test"
@@ -121,13 +121,13 @@ for case in "${CASES[@]}"; do
         --offset_lr_init $OFFSET_LR_INIT \
         --images images_gt_downsampled \
         --log_file $LOG_FILE \
-        --max_n_gaussian $MAX_N_GAUSSIAN
-        # --useFF
+        --max_n_gaussian $MAX_N_GAUSSIAN \
+        --useFF
         # --use_feat_bank true\
         # -m debugpy --wait-for-client --listen localhost:5685 \
         # -m debugpy --wait-for-client --listen localhost:5684 \
 
-        rm -r $model_dir/mono_depths
+        # rm -r $model_dir/mono_depths
 done
 
 echo ""

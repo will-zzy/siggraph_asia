@@ -264,6 +264,9 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		rgb[idx * C + 1] = result.y;
 		rgb[idx * C + 2] = result.z;
 	}
+	// rgb[idx * C + 0] = 0.0f;
+	// rgb[idx * C + 1] = 0.0f;
+	// rgb[idx * C + 2] = 0.0f;
 
 	// Store some useful helper data for the next steps.
 	depths[idx] = p_view.z;
@@ -308,9 +311,6 @@ renderCUDA(
 	uint32_t pix_id = W * pix.y + pix.x;
 	float2 pixf = { (float)pix.x, (float)pix.y };
 
-	bool update_score = false;
-	if (get_flag)
-		update_score = metric_map[pix_id] == 1;
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W&& pix.y < H;
@@ -334,6 +334,9 @@ renderCUDA(
 		}
 	}
 	
+	bool update_score = false;
+	if (get_flag && inside)
+		update_score = metric_map[pix_id] == 1;
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];

@@ -86,13 +86,14 @@ class PipelineParams(ParamGroup):
         self.densify_mode = "free"
         self.max_n_gaussian = -1
         self.useFF = False
+        self.useScaffold = False
         self.FF_downsample=8
         self.max_n_gaussian=4000000
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 6_000
+        self.iterations = 12_000
         self.position_lr_init = 0.0
         self.position_lr_final = 0.0
         self.position_lr_delay_mult = 0.01
@@ -154,6 +155,12 @@ class OptimizationParams(ParamGroup):
         self.depth_l1_weight_final = 0.01
         self.random_background = False
         self.optimizer_type = "default"
+        
+        # faster parameters
+        self.loss_thresh = 0.1
+        self.grad_thresh = 0.0002
+        self.dense = 0.001
+        self.grad_abs_thresh = 0.0012  
         super().__init__(parser, "Optimization Parameters")
 
 def get_combined_args(parser : ArgumentParser):

@@ -12,18 +12,20 @@
 import os
 import random
 import json
+from typing import Union
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
-from scene.gaussian_model import GaussianModel
+from scene.gaussian_model import GaussianModel, GaussianModel_origin
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
 class Scene:
 
-    gaussians : GaussianModel
+    gaussians : Union[GaussianModel, GaussianModel_origin]
+    FF_gaussians : GaussianModel_origin
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, pipe, anchor_xyz=None, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
-        """b
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, pipe, FF_gaussians=None, load_iteration=None, shuffle=True, resolution_scales=[1.0], ply_path=None):
+        """
         :param path: Path to colmap scene main folder.
         """
         self.model_path = args.model_path
@@ -48,7 +50,6 @@ class Scene:
         else:
             assert False, "Could not recognize scene type!"
 
-        self.gaussians.set_appearance(len(scene_info.train_cameras))
         
         if not self.loaded_iter:
             if ply_path is not None:
@@ -80,7 +81,7 @@ class Scene:
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, True)
 
-        if self.loaded_iter and not pipe.useFF:
+        if self.loaded_iter and pipe.useScaffold:
             self.gaussians.load_ply_sparse_gaussian(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
@@ -88,12 +89,21 @@ class Scene:
             self.gaussians.load_mlp_checkpoints(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter)))
-        elif not pipe.useFF:
-            if anchor_xyz is not None:
+        elif pipe.useScaffold:
+            if FF_gaussians is not None:
             # self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
             # self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent) # embedding在gaussian model中声明
-                self.gaussians.create_from_pcd(anchor_xyz._xyz, self.cameras_extent) # embedding在gaussian model中声明
-
+                self.gaussians.create_from_pcd(FF_gaussians._xyz, self.cameras_extent) # embedding在gaussian model中声明
+            else:
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+        else:
+            if FF_gaussians is not None:
+                self.gaussians = FF_gaussians
+                self.gaussians.set_appearance(scene_info.train_cameras)
+                
+            else:
+                self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, self.cameras_extent)
+        
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))

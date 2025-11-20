@@ -10,6 +10,7 @@ import json
 import uuid
 from torch import nn
 from PIL import Image
+from simple_knn._C import distCUDA2
 import torchvision.transforms.functional as tf
 # from lpipsPyTorch import lpips
 import lpips
@@ -29,7 +30,7 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from utils.schedule_utils import TrainingScheduler
 from utils.robotic_utils import sh_rotation, matrix_to_quaternion, quaternion_to_matrix, load_ply, save_ply
-
+from utils.fast_utils import sampling_cameras, compute_gaussian_score_fastgs
 
 import cv2
 import csv
@@ -217,7 +218,7 @@ def align_icp_with_sfm(
 
     # 可选：保存轨迹对齐图（此处用点云对齐，不再画轨迹）
     return T, stats, gaussians
-def cat_sparse_points_into_gaussians(gaussians, colmap_xyz, colmap_rgb):
+def cat_sparse_points_into_gaussians(pipe, gaussians, colmap_xyz, colmap_rgb):
     """
     将 COLMAP 稀疏点拼接进高斯：
       - 复制现有各属性（scaling/opacity/rotation/features_rest 等）n_new 份
@@ -228,7 +229,6 @@ def cat_sparse_points_into_gaussians(gaussians, colmap_xyz, colmap_rgb):
     device = gaussians._xyz.device
     dtype  = gaussians._xyz.dtype
 
-    # --- 准备新点 ---
     xyz_np = np.asarray(colmap_xyz, dtype=np.float32)
     rgb_np = np.asarray(colmap_rgb, dtype=np.float32)
 
@@ -245,7 +245,10 @@ def cat_sparse_points_into_gaussians(gaussians, colmap_xyz, colmap_rgb):
         # 以第 0 个为模板，repeat k 次
         return t[:1].expand(k, *t.shape[1:]).clone()
 
-    tmpl_scaling   = repeat_like(gaussians._scaling,   n_new)   # [...,]
+    # tmpl_scaling   = repeat_like(gaussians._scaling,   n_new)   # [...,]
+    
+    dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(xyz_np)).float().cuda()), 0.0000001)
+    tmpl_scaling = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
     tmpl_opacity   = repeat_like(gaussians._opacity,   n_new)   # [...,]
     tmpl_rotation  = repeat_like(gaussians._rotation,  n_new)   # [K,4] 四元数
     tmpl_frest     = repeat_like(gaussians._features_rest, n_new)  # [K, ?, 3]（你当前实现）
@@ -255,14 +258,11 @@ def cat_sparse_points_into_gaussians(gaussians, colmap_xyz, colmap_rgb):
     # xyz 直接替换
     new_xyz_block = new_xyz
 
-    # features_dc 形状适配
-    # 常见两种： [N,3,1] 以及 [N,1,3]
     if tmpl_fdc.dim() == 3 and tmpl_fdc.shape[1:] == (3,1):
         new_fdc_block = new_rgb.unsqueeze(-1)          # [K,3,1]
     elif tmpl_fdc.dim() == 3 and tmpl_fdc.shape[1:] == (1,3):
         new_fdc_block = new_rgb.unsqueeze(1)           # [K,1,3]
     else:
-        # 兜底：按最后一维=3 去适配
         if tmpl_fdc.size(-1) == 3:
             # e.g. [N,1,3] / [N,?,3]
             shape_front = list(tmpl_fdc.shape[1:-1])
@@ -271,13 +271,20 @@ def cat_sparse_points_into_gaussians(gaussians, colmap_xyz, colmap_rgb):
             raise ValueError(f"Unsupported features_dc shape: {tuple(tmpl_fdc.shape)}")
 
     # --- 拼接回去 ---
-    gaussians._xyz          = torch.cat([gaussians._xyz,          new_xyz_block], dim=0)
-    gaussians._scaling      = torch.cat([gaussians._scaling,      tmpl_scaling],  dim=0)
-    gaussians._opacity      = torch.cat([gaussians._opacity,      tmpl_opacity],  dim=0)
-    gaussians._rotation     = torch.cat([gaussians._rotation,     tmpl_rotation], dim=0)
-    gaussians._features_rest= torch.cat([gaussians._features_rest,tmpl_frest],    dim=0)
-    gaussians._features_dc  = torch.cat([gaussians._features_dc,  new_fdc_block], dim=0)
-
+    if pipe.useScaffold:
+        gaussians._xyz          = torch.cat([gaussians._xyz,          new_xyz_block], dim=0)
+        gaussians._scaling      = torch.cat([gaussians._scaling,      tmpl_scaling],  dim=0)
+        gaussians._opacity      = torch.cat([gaussians._opacity,      tmpl_opacity],  dim=0)
+        gaussians._rotation     = torch.cat([gaussians._rotation,     tmpl_rotation], dim=0)
+        gaussians._features_rest= torch.cat([gaussians._features_rest,tmpl_frest],    dim=0)
+        gaussians._features_dc  = torch.cat([gaussians._features_dc,  new_fdc_block], dim=0)
+    else:
+        gaussians._xyz          = nn.Parameter(torch.cat([gaussians._xyz,          new_xyz_block], dim=0))
+        gaussians._scaling      = nn.Parameter(torch.cat([gaussians._scaling,      tmpl_scaling],  dim=0))
+        gaussians._opacity      = nn.Parameter(torch.cat([gaussians._opacity,      tmpl_opacity],  dim=0))
+        gaussians._rotation     = nn.Parameter(torch.cat([gaussians._rotation,     tmpl_rotation], dim=0))
+        gaussians._features_rest= nn.Parameter(torch.cat([gaussians._features_rest,tmpl_frest],    dim=0))
+        gaussians._features_dc  = nn.Parameter(torch.cat([gaussians._features_dc,  new_fdc_block], dim=0))
     return gaussians
 def anySplat(dataset, opt, pipe):
     
@@ -297,9 +304,8 @@ def anySplat(dataset, opt, pipe):
     from anySplat.model.model.anysplat import AnySplat
     from utils.image_utils import process_image
 
-    # Load the model from Hugging Face
-    # model = AnySplat.from_pretrained("./anySplat/ckpt/model.safetensors")
-    # model = AnySplat.from_pretrained("lhjiang/anysplat")
+    
+    # use AnySplat pre-trained model
     ckpt_root = Path("./anySplat/ckpt")
     config_path = ckpt_root / "config.json"
     weights_path = ckpt_root / "model.safetensors"
@@ -340,15 +346,18 @@ def anySplat(dataset, opt, pipe):
     for param in model.parameters():
         param.requires_grad = False
 
-    # Load and preprocess example images (replace with your own image paths)
     
+    
+    
+    
+    # load SfM data, align, and cat SfM points
     images_dir = os.path.join(dataset.source_path, dataset.images)
     from scene.colmap_loader import read_extrinsics_text, qvec2rotmat, read_points3D_text
     cameras_extrinsic_file = os.path.join(dataset.source_path, "sparse/0", "images.txt")
     SFM_pts_file = os.path.join(dataset.source_path, "sparse/0", "points3D.txt")
     
     cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
-    xyz, rgb, _ = read_points3D_text(SFM_pts_file) # 来着colmap的点
+    xyz, rgb, _ = read_points3D_text(SFM_pts_file) # 来自colmap的点
     imgs = []
     cams_unsorted = []
     for idx, key in enumerate(cam_extrinsics):
@@ -373,7 +382,7 @@ def anySplat(dataset, opt, pipe):
             image_path = os.path.join(os.path.dirname(images_dir), "images", extr.name)
         imgs.append(os.path.join(image_path))
         slam_c2ws.append(cam.pose[None])
-    interval = int(len(imgs) / 40) + 1 # 处理40张train
+    interval = int(len(imgs) / 20) + 1 # 处理20张train
     imgs = imgs[::interval]
     slam_c2ws = slam_c2ws[::interval]
     
@@ -383,21 +392,21 @@ def anySplat(dataset, opt, pipe):
     b, v, _, h, w = images.shape
 
     # Run Inference
-    gs, pred_context_pose = model.inference((images+1)*0.5)
+    gs, pred_context_pose = model.inference((images + 1)*0.5)
     # gaussians.mean
     # downsample = 8
     # downsample_points = pipe.FF_downsample # for scaffold's anchor
     # interval = int(gs.means.shape[1] / downsample_points) + 1
     
     interval = pipe.FF_downsample
-    gaussians = GaussianModel_origin(4, "sparse_adam")
+    gaussians = GaussianModel_origin(3, opt.optimizer_type)
     gaussians._xyz = gs.means[0, ::interval, ...]
-    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::interval, ...])
+    gaussians._scaling = gaussians.scaling_inverse_activation(gs.scales[0, ::interval, ...] * 0.3) # ff GS的scale太大了，要缩小一些
     gaussians._opacity = gaussians.inverse_opacity_activation(gs.opacities[0, ::interval, ...][..., None])
     gaussians._rotation = gs.rotations[0, ::interval, ...]
-    gaussians._features_dc = gs.harmonics[0, ::interval, :, :1].transpose(1, 2)
-    gaussians._features_rest = gs.harmonics[0, ::interval, :, 1:].transpose(1, 2)
-    
+    gaussians._features_dc = gs.harmonics[0, ::interval, :, :1].transpose(1, 2).contiguous()
+    gaussians._features_rest = gs.harmonics[0, ::interval, :, 1:].transpose(1, 2).contiguous()
+    gaussians.active_sh_degree = int(gs.harmonics.shape[-1]**0.5 - 1)
     del gs, model
     torch.cuda.empty_cache()
     
@@ -415,14 +424,13 @@ def anySplat(dataset, opt, pipe):
     #     with_scaling=True        # 允许估计尺度（Sim(3)）
     # )
     gaussians_aligned = cat_sparse_points_into_gaussians(
+    pipe,
     gaussians_aligned,
     colmap_xyz=xyz,   # read_points3D_text 返回的 xyz
     colmap_rgb=rgb    # read_points3D_text 返回的 rgb
     )
-    
-    
+        
     return gaussians_aligned, pred_all_extrinsic, pred_all_intrinsic
-    # save_interpolated_video(pred_all_extrinsic, pred_all_intrinsic, b, h, w, gaussians, image_folder, model.decoder)
 
 
 def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=None):
@@ -607,19 +615,31 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     gaussians = None
     if args.useFF:
-        gaussians, pred_all_extrinsic, pred_all_intrinsic = anySplat(lp.extract(args), op.extract(args), pp.extract(args))
-        # align()
-        gaussians.xyz_gradient_accum = torch.zeros((gaussians.get_xyz.shape[0], 1), device=gaussians.get_xyz.device)
-        gaussians.denom = torch.zeros((gaussians.get_xyz.shape[0], 1), device=gaussians.get_xyz.device)
-        scene = Scene(dataset, gaussians, pipe, shuffle=False)
         
-    
+        FF_gaussians, pred_all_extrinsic, pred_all_intrinsic = anySplat(dataset, opt, pipe)
+        FF_gaussians.xyz_gradient_accum = torch.zeros((FF_gaussians.get_xyz.shape[0], 1), device=FF_gaussians.get_xyz.device)
+        FF_gaussians.denom = torch.zeros((FF_gaussians.get_xyz.shape[0], 1), device=FF_gaussians.get_xyz.device)
+        if pipe.useScaffold:
+            # align()
+            gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
+                                  dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
+            scene = Scene(dataset, gaussians, pipe, FF_gaussians, shuffle=False)
+        else:
+            gaussians = GaussianModel_origin(dataset.feat_dim, opt.optimizer_type)
+            scene = Scene(dataset, gaussians, pipe, FF_gaussians, shuffle=False)
+            gaussians = scene.gaussians
     else:
-        gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
-                              dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
-        anchor_xyz, pred_all_extrinsic, pred_all_intrinsic = anySplat(lp.extract(args), op.extract(args), pp.extract(args))
-        scene = Scene(dataset, gaussians, pipe, anchor_xyz, shuffle=False)
-    
+        if pipe.useScaffold:
+            pass
+            gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
+                                  dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
+    #         anchor_xyz, pred_all_extrinsic, pred_all_intrinsic = anySplat(dataset, opt, pipe)
+            scene = Scene(dataset, gaussians, pipe, shuffle=False)
+        else:
+    #         gaussians = GaussianModel_origin(dataset.feat_dim, opt.optimizer_type)
+    #         scene = Scene(dataset, gaussians, pipe, shuffle=False)
+            gaussians = GaussianModel_origin(dataset.feat_dim, opt.optimizer_type)
+            scene = Scene(dataset, gaussians, pipe, shuffle=False)
     
     
     
@@ -709,19 +729,19 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
-        if not pipe.useFF:
-            voxel_visible_mask = prefilter_voxel(viewpoint_cam, gaussians, pipe, background)
+
         retain_grad = (iteration < opt.update_until and iteration >= 0)
         # Rescale GT image for DashGaussian
         gt_image = viewpoint_cam.original_image.cuda()
         if render_scale > 1:
             gt_image = torch.nn.functional.interpolate(gt_image[None], scale_factor=1/render_scale, mode="bilinear", 
                                                        recompute_scale_factor=True, antialias=True)[0]
-        if not pipe.useFF:
+        if pipe.useScaffold:
+            voxel_visible_mask = prefilter_voxel(viewpoint_cam, gaussians, pipe, background)
             render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)
             image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
         else:
-            render_pkg = render_origin(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:])
+            render_pkg = render_origin(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:],retain_grad=retain_grad, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # if viewpoint_cam.alpha_mask is not None:
@@ -758,13 +778,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
 
-        # with torch.no_grad():
-        #     if iteration % 200 == 0:
-        #         image_write = image.permute(1,2,0).detach().cpu().numpy()
-        #         image_write = (image_write * 255).astype("uint8")
-        #         os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-        #         cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
-        #         print(global_transform)
+        with torch.no_grad():
+            if iteration % 200 == 0:
+                image_write = image.permute(1,2,0).detach().cpu().numpy()
+                image_write = (image_write * 255).astype("uint8")
+                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+
         
         
         
@@ -816,7 +836,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (elapsed_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
                 all_time = elapsed_time
-                eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
+                eval(pipe, case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
                 scene.save(iteration)
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
@@ -825,15 +845,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
 
 
-            if not pipe.useFF: # 不使用FF，使用scaffold-GS
+            if pipe.useScaffold: # 使用scaffold-GS
                 # Densification
                 if iteration < opt.densify_until_iter and iteration > opt.start_stat and (gaussians._scaling.shape[0] * dataset.n_offsets) < pipe.max_n_gaussian:
                     # Keep track of max radii in image-space for pruning
                     gaussians.training_statis(viewspace_point_tensor, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
                     # gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                     # gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-                    if iteration > opt.update_from and iteration % opt.update_interval == 0:
-                        gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
+                        gaussians.adjust_anchor(check_interval=opt.densification_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
                     # if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     #     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     #     # Apply DashGaussian primitive scheduler to control densification.
@@ -881,25 +901,45 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             
             
             
-            elif pipe.useFF: # 使用原版的
+            elif not pipe.useScaffold: # 使用原版3DGS表达
                 if iteration < opt.densify_until_iter:
                     # Keep track of max radii in image-space for pruning
                     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and (gaussians._scaling.shape[0] * dataset.n_offsets) < pipe.max_n_gaussian:
+                    if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                         size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                         # Apply DashGaussian primitive scheduler to control densification.
                         densify_rate = scheduler.get_densify_rate(iteration, gaussians.get_xyz.shape[0], render_scale)
-                        momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
-                                                                   size_threshold, radii, densify_rate=densify_rate)
+                        
+                        sample_view_stack = scene.getTrainCameras().copy()
+                        camlist = sampling_cameras(sample_view_stack)
+                        
+                        importance_score, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, dataset, opt, pipe, bg, DENSIFY=True, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)                    
+                        gaussians.densify_and_prune_fastgs(max_screen_size = size_threshold, 
+                                                min_opacity = 0.005, 
+                                                extent = scene.cameras_extent, 
+                                                args = opt,
+                                                importance_score = importance_score,
+                                                pruning_score = pruning_score)
+                        
+                        
+                        
+                        # momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
+                        #                                            size_threshold, radii, densify_rate=densify_rate)
                         # Update max_n_gaussian
-                        scheduler.update_momentum(momentum_add)
+                        # scheduler.update_momentum(momentum_add)
                         # Update render scale based on the DashGaussian resolution scheduler. 
-                        render_scale = scheduler.get_res_scale(iteration)
+                        # render_scale = scheduler.get_res_scale(iteration)
 
                     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                         gaussians.reset_opacity()
+                if iteration % 3000 == 0 and iteration > 15_000 and iteration < 30_000:
+                    my_viewpoint_stack = scene.getTrainCameras().copy()
+                    camlist = sampling_cameras(my_viewpoint_stack)
+
+                    _, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, opt)                    
+                    gaussians.final_prune_fastgs(min_opacity = 0.1, pruning_score = pruning_score)
 
                 # Optimizer step
                 if iteration < opt.iterations:
@@ -1010,7 +1050,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_scalar('total_points', scene.gaussians.get_scaling.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None, all_time=None):
+def eval(pipe, case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None, all_time=None):
     torch.cuda.empty_cache()
     config = {'name': 'test', 'cameras' : scene.getTestCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
@@ -1022,9 +1062,11 @@ def eval(case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteratio
         for idx, viewpoint in enumerate(config['cameras']):
             
             transform_viewpoint = update_pose_by_global(viewpoint, global_transform)
-            voxel_visible_mask = prefilter_voxel(transform_viewpoint, scene.gaussians, pipe, background, 1.0, None)
-            image = torch.clamp(renderFunc(transform_viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
-                    
+            if pipe.useScaffold:
+                voxel_visible_mask = prefilter_voxel(transform_viewpoint, scene.gaussians, pipe, background, 1.0, None)
+                image = torch.clamp(renderFunc(transform_viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+            else:
+                image = torch.clamp(renderFunc2(transform_viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0) 
             # try:
             #     voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
             #     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)

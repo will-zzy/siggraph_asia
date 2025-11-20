@@ -318,7 +318,7 @@ def render(viewpoint_camera,
         xyz, color, opacity, scaling, rot, neural_opacity, mask = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
     else:
         xyz, color, opacity, scaling, rot = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
-    screenspace_points = torch.zeros_like(xyz, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points = torch.zeros([xyz.shape[0], 6], dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
     if retain_grad:
         try:
             screenspace_points.retain_grad()
@@ -345,7 +345,9 @@ def render(viewpoint_camera,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=pipe.antialiasing
+        antialiasing=pipe.antialiasing,
+        get_flag=False,
+        metric_map=None
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -388,7 +390,7 @@ def render(viewpoint_camera,
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, _ = rasterizer(
             means3D = xyz,
             means2D = screenspace_points,
             # dc = dc,
@@ -404,7 +406,7 @@ def render(viewpoint_camera,
             theta=cam_rot_delta,
             rho=cam_trans_delta)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, _ = rasterizer(
             means3D = xyz,
             means2D = screenspace_points,
             # shs = shs,
@@ -478,7 +480,9 @@ def prefilter_voxel(viewpoint_camera,
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=True
+        antialiasing=True,
+        get_flag=False,
+        metric_map=None
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -538,7 +542,9 @@ def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=pipe.antialiasing
+        antialiasing=pipe.antialiasing,
+        get_flag=False,
+        metric_map=None
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -580,7 +586,7 @@ def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
@@ -593,7 +599,7 @@ def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
             theta=viewpoint_camera.cam_rot_delta,
             rho=viewpoint_camera.cam_trans_delta)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
@@ -618,7 +624,8 @@ def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
         "viewspace_points": screenspace_points,
         "visibility_filter" : (radii > 0).nonzero(),
         "radii": radii,
-        "depth" : depth_image
+        "depth" : depth_image,
+        "accum_metric_counts": accum_metric_counts
         }
     
     return out
@@ -629,7 +636,20 @@ def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
     
     
 
-def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False, render_size=None):
+def render_origin(viewpoint_camera, 
+                  pc : GaussianModel, 
+                  pipe, bg_color : torch.Tensor, 
+                  scaling_modifier = 1.0, 
+                  separate_sh = False, 
+                  override_color = None, 
+                  use_trained_exp=False, 
+                  render_size=None,
+                  retain_grad=False,
+                  cam_rot_delta=None,
+                  cam_trans_delta=None,
+                  get_flag=False,
+                  metric_map=None
+                  ):
     """
     Render the scene. 
     
@@ -637,7 +657,7 @@ def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
     """
  
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points = torch.zeros([pc.get_xyz.shape[0], 6], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda")
     try:
         screenspace_points.retain_grad()
     except:
@@ -661,7 +681,9 @@ def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
         campos=viewpoint_camera.camera_center,
         prefiltered=False,
         debug=pipe.debug,
-        antialiasing=pipe.antialiasing
+        antialiasing=pipe.antialiasing,
+        get_flag=get_flag,
+        metric_map=metric_map
     )
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
@@ -703,7 +725,7 @@ def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     if separate_sh:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
             means3D = means3D,
             means2D = means2D,
             dc = dc,
@@ -713,10 +735,10 @@ def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
             scales = scales,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp,
-            theta=viewpoint_camera.cam_rot_delta,
-            rho=viewpoint_camera.cam_trans_delta)
+            theta=cam_rot_delta,
+            rho=cam_trans_delta)
     else:
-        rendered_image, radii, depth_image = rasterizer(
+        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
             means3D = means3D,
             means2D = means2D,
             shs = shs,
@@ -725,8 +747,8 @@ def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
             scales = scales,
             rotations = rotations,
             cov3D_precomp = cov3D_precomp,
-            theta=viewpoint_camera.cam_rot_delta,
-            rho=viewpoint_camera.cam_trans_delta)
+            theta=cam_rot_delta,
+            rho=cam_trans_delta)
         
     # Apply exposure to rendered image (training only)
     if use_trained_exp:
@@ -741,7 +763,8 @@ def render_origin(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.T
         "viewspace_points": screenspace_points,
         "visibility_filter" : (radii > 0).nonzero(),
         "radii": radii,
-        "depth" : depth_image
+        "depth" : depth_image,
+        "accum_metric_counts": accum_metric_counts
         }
     
     return out
