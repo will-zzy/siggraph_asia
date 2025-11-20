@@ -730,7 +730,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
 
-        retain_grad = (iteration < opt.update_until and iteration >= 0)
+        retain_grad = (iteration < opt.densify_until_iter and iteration >= 0)
         # Rescale GT image for DashGaussian
         gt_image = viewpoint_cam.original_image.cuda()
         if render_scale > 1:
@@ -867,7 +867,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                     # if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     #     gaussians.reset_opacity()
-                elif iteration == opt.update_until:
+                elif iteration == opt.densify_until_iter:
                     del gaussians.opacity_accum
                     del gaussians.offset_gradient_accum
                     del gaussians.offset_denom
@@ -958,7 +958,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pose_optimizer.step()
                     pose_optimizer.zero_grad(set_to_none=True)
             
-            if iteration > 500 and iteration % 300 == 0 and iteration < opt.update_until :
+            if iteration > 500 and iteration % 300 == 0 and iteration < opt.densify_until_iter :
                 # update_pose(viewpoint_cam)
                 update_global=True
                 for view in scene.getTrainCameras():
