@@ -1834,7 +1834,7 @@ class GaussianModel_origin:
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
     
-    def densify_and_prune_fastgs(self, max_screen_size, min_opacity, extent, args, importance_score = None, pruning_score = None):
+    def densify_and_prune_fastgs(self, max_screen_size, max_grad, min_opacity, extent, args, importance_score = None, pruning_score = None):
         
         ''' 
             Densification and Pruning based on FastGS criteria:
@@ -1891,3 +1891,4 @@ class GaussianModel_origin:
 
 
         torch.cuda.empty_cache()
+        return (grad_vars >= max_grad).sum()

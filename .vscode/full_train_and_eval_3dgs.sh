@@ -56,10 +56,10 @@ scaling_lr=0.007 # 0.007
 rotation_lr=0.002 # 0.002
 feature_dc_lr=0.01 # 0.0025
 feature_rest_lr=0.0005 # 0.005
-xyz_lr_init=0.0 # 0.00016
-xyz_lr_final=0.0 # 0.000016
+xyz_lr_init=0.00016 # 0.00016
+xyz_lr_final=0.000016 # 0.000016
 max_n_gaussian=3000000
-iterations=10000
+iterations=12000
 
 
 
@@ -95,7 +95,7 @@ for case in "${CASES[@]}"; do
     ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH CUDA_VISIBLE_DEVICES=$device python \
         train_dash.py -s \
         $root_dir -m $model_dir -r 2 \
-        --resolution_mode const \
+        --resolution_mode freq \
         --densify_until_iter $densify_until_iter \
         --densify_mode freq \
         --disable_viewer \

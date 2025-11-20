@@ -669,7 +669,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # Init DashGaussian scheduler
     scheduler = TrainingScheduler(opt, pipe, gaussians, 
                                   [cam.original_image for cam in scene.getTrainCameras()])
-    render_scale = scheduler.get_res_scale(1)
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -698,6 +697,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     
     pose_optimizer = torch.optim.Adam(l)
     
+    render_scale = scheduler.get_res_scale(1)
     start_time = time.time()
     for iteration in range(first_iter, opt.iterations + 1):
 
@@ -764,10 +764,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         Ll1depth_pure = 0.0 # TODO: maybe add depth supervision
         if depth_l1_weight(iteration) > 0 and viewpoint_cam.depth_reliable: # 加速收敛
             invDepth = render_pkg["depth"]
+            
             mono_invdepth = viewpoint_cam.invdepthmap.cuda()
-            depth_mask = viewpoint_cam.depth_mask.cuda()
+            
+            if render_scale > 1:
+                mono_invdepth = torch.nn.functional.interpolate(mono_invdepth[None], scale_factor=1/render_scale, 
+                                                        mode="bilinear", recompute_scale_factor=True, antialias=True)[0, 0]  
 
-            Ll1depth_pure = torch.abs((invDepth  - mono_invdepth) * depth_mask).mean()
+            Ll1depth_pure = torch.abs(invDepth  - mono_invdepth).mean()
             Ll1depth = depth_l1_weight(iteration) * Ll1depth_pure *0.3
             loss += Ll1depth
             Ll1depth = Ll1depth.item()
@@ -916,7 +920,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         camlist = sampling_cameras(sample_view_stack)
                         
                         importance_score, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, dataset, opt, pipe, bg, DENSIFY=True, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)                    
-                        gaussians.densify_and_prune_fastgs(max_screen_size = size_threshold, 
+                        momentum_add = gaussians.densify_and_prune_fastgs(max_screen_size = size_threshold, 
+                                                max_grad=0.005,
                                                 min_opacity = 0.005, 
                                                 extent = scene.cameras_extent, 
                                                 args = opt,
@@ -928,18 +933,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                         # momentum_add = gaussians.prune_and_densify(opt.densify_grad_threshold, 0.005, scene.cameras_extent, 
                         #                                            size_threshold, radii, densify_rate=densify_rate)
                         # Update max_n_gaussian
-                        # scheduler.update_momentum(momentum_add)
+                        scheduler.update_momentum(momentum_add)
                         # Update render scale based on the DashGaussian resolution scheduler. 
-                        # render_scale = scheduler.get_res_scale(iteration)
+                        render_scale = scheduler.get_res_scale(iteration)
 
                     if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                         gaussians.reset_opacity()
-                if iteration % 3000 == 0 and iteration > 15_000 and iteration < 30_000:
-                    my_viewpoint_stack = scene.getTrainCameras().copy()
-                    camlist = sampling_cameras(my_viewpoint_stack)
+                # if iteration % 3000 == 0 and iteration > 15_000 and iteration < 30_000:
+                #     my_viewpoint_stack = scene.getTrainCameras().copy()
+                #     camlist = sampling_cameras(my_viewpoint_stack)
 
-                    _, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, opt)                    
-                    gaussians.final_prune_fastgs(min_opacity = 0.1, pruning_score = pruning_score)
+                #     _, pruning_score = compute_gaussian_score_fastgs(camlist, gaussians, pipe, bg, opt)                    
+                #     gaussians.final_prune_fastgs(min_opacity = 0.1, pruning_score = pruning_score)
 
                 # Optimizer step
                 if iteration < opt.iterations:
@@ -958,7 +963,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pose_optimizer.step()
                     pose_optimizer.zero_grad(set_to_none=True)
             
-            if iteration > 500 and iteration % 300 == 0 and iteration < opt.densify_until_iter :
+            if iteration > 5000000 and iteration % 300 == 0 and iteration < opt.densify_until_iter :
                 # update_pose(viewpoint_cam)
                 update_global=True
                 for view in scene.getTrainCameras():

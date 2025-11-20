@@ -48,11 +48,11 @@ class TrainingScheduler():
 		self.init_reso_scheduler(original_images)
 
 		# if self.resolution_mode == "freq":
-			# gaussians.xyz_scheduler_args = get_expon_lr_func(lr_init=opt.position_lr_init*gaussians.spatial_lr_scale, 
-			# 										         lr_final=opt.position_lr_final*gaussians.spatial_lr_scale, 
-			# 												 lr_delay_mult=opt.position_lr_delay_mult, 
-			# 												 max_steps=opt.position_lr_max_steps, 
-			# 												 decay_from_iter=self.lr_decay_from_iter())
+		# 	gaussians.xyz_scheduler_args = get_expon_lr_func(lr_init=opt.xyz_lr_init*gaussians.spatial_lr_scale, 
+		# 											         lr_final=opt.xyz_lr_final*gaussians.spatial_lr_scale, 
+		# 													 lr_delay_mult=opt.xyz_lr_delay_mult, 
+		# 													 max_steps=opt.xyz_lr_max_steps, 
+		# 													 decay_from_iter=self.lr_decay_from_iter())
 			# gaussians.offset_scheduler_args = get_expon_lr_func(lr_init=opt.offset_lr_init*self.spatial_lr_scale,
             #                                         lr_final=opt.offset_lr_final*self.spatial_lr_scale,
             #                                         lr_delay_mult=opt.offset_lr_delay_mult,
