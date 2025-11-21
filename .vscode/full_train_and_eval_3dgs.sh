@@ -4,18 +4,18 @@
 
 CASES=(
     1747834320424
-    # 1748153841908
-    # 1748165890960
-    # 1748242779841
-    # 1748243104741
-    # 1749449291156
-    # 1749606908096
-    # 1749803955124
-    # 1750578027423
-    # 1750824904001
-    # 1750825558261
-    # 1750846199351
-    # 1751090600427
+    1748153841908
+    1748165890960
+    1748242779841
+    1748243104741
+    1749449291156
+    1749606908096
+    1749803955124
+    1750578027423
+    1750824904001
+    1750825558261
+    1750846199351
+    1751090600427
 )
 
 
@@ -44,7 +44,7 @@ densify_grad_threshold=0.0002
 feat_dim=64
 n_offsets=10 # 每个anchor的子高斯数
 
-densify_until_iter=3000
+densify_until_iter=5000
 densify_from_iter=500
 densification_interval=100
 # FF_downsample=100000 # 对anySplat的点下采样倍数，用于充当anchor
@@ -91,7 +91,7 @@ for case in "${CASES[@]}"; do
 
     if [ -d "$model_dir/test" ]; then
         rm -rf "$model_dir/test"
-        # rm -rf "$model_dir/point_cloud"
+        rm -rf "$model_dir/point_cloud"
     fi
     ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH CUDA_VISIBLE_DEVICES=$device python \
         train_dash.py -s \

@@ -165,6 +165,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--log_file", type=str, default = None)
+    parser.add_argument("--read_time_file", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
     args = parser.parse_args(sys.argv[1:])
     dataset, opt, pipe = lp.extract(args), op.extract(args), pp.extract(args)
@@ -185,6 +186,11 @@ if __name__ == "__main__":
     # 转成 float tensor
     rows = [list(map(float, line.strip().split())) for line in lines]
     global_transform = torch.tensor(rows, dtype=torch.float32)
+    
     case_name = dataset.source_path.split("/")[-1]
+    time_path=os.path.join(scene.model_path, args.read_time_file) # 这是一个json文件
+    with open(time_path, "r") as f:
+        time_info = json.load(f)
+    all_time = time_info[case_name]["time"]
     with torch.no_grad():
-        eval(dataset, pipe, case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), -1, 0, args.log_file, global_transform = global_transform, all_time=0.0)
+        eval(dataset, pipe, case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), -1, 0, args.log_file, global_transform = global_transform, all_time=float(all_time))

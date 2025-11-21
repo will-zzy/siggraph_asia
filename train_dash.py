@@ -1118,7 +1118,7 @@ def eval(dataset, pipe, case_name, scene : Scene, renderFunc, renderFunc2, rende
                 with open(log_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
-            t_val = f"{float(all_time):.1f}"
+            t_val = f"{float(all_time):.2f}"
 
             psnr_val = f"{float(psnr_test):.4f}"
 
