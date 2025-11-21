@@ -72,7 +72,7 @@ Directory layout example:
     ├── 1747834320424
     ...
     ├── 1751090600427
-    └── metrics.json
+    └── metrics_train.json
   ...
   $BASE_DIR
     └── 1751090600427
@@ -84,7 +84,6 @@ Directory layout example:
 
 ## 1.Evaluation
 
-Although evaluation runs during training, we also provide a unified evaluation script.
 
 Use `.vscode/full_eval.sh` and edit:
 

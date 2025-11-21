@@ -20,9 +20,9 @@ n_offsets=10
 
 DATA_PATH=/root/data/eval_data_pinhole
 EVALUATE_DIR=/root/data/eval_data_pinhole/$NAME
-LOG_FILE=$EVALUATE_DIR/metrics_PSNR.json
-READ_TIME_FILE=$EVALUATE_DIR/metrics.json
-# rm -f "$LOG_FILE"
+LOG_FILE=$EVALUATE_DIR/metrics.json
+READ_TIME_FILE=$EVALUATE_DIR/metrics_train.json
+rm -f "$LOG_FILE"
 for case in "${CASES[@]}"; do
     root_dir=$DATA_PATH/$case
     model_dir=$EVALUATE_DIR/$case

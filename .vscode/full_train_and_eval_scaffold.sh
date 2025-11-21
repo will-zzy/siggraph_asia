@@ -79,7 +79,7 @@ MAX_N_GAUSSIAN=3000000
 device=0
 #  --eval
 # rm -r $model_dir/test
-LOG_FILE=$EXP_DIR/metrics.json
+LOG_FILE=$EXP_DIR/metrics_train.json
 rm -f "$LOG_FILE"
 for case in "${CASES[@]}"; do
     

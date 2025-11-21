@@ -51,9 +51,9 @@ densification_interval=100
 FF_downsample=16 # 对anySplat的点下采样倍数，用于充当anchor
 
 
-opacity_lr=0.02 # 0.02
-scaling_lr=0.007 # 0.007
-rotation_lr=0.002 # 0.002
+opacity_lr=0.01 # 0.02
+scaling_lr=0.005 # 0.007
+rotation_lr=0.001 # 0.002
 feature_dc_lr=0.01 # 0.01
 feature_rest_lr=0.0005 # 0.0005
 xyz_lr_init=0.00016 # 0.00016
@@ -78,7 +78,7 @@ iterations=12000
 device=0
 #  --eval
 # rm -r $model_dir/test
-LOG_FILE=$EXP_DIR/metrics.json
+LOG_FILE=$EXP_DIR/metrics_train.json
 rm -f "$LOG_FILE"
 for case in "${CASES[@]}"; do
     
