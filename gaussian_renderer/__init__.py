@@ -142,157 +142,6 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     else:
         return xyz, color, opacity, scaling, rot
     
-    
-    # combine for parallel masking
-    # concatenated = torch.cat([grid_scaling, anchor], dim=-1)
-    # concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
-    # concatenated_all = torch.cat([concatenated_repeated, color, scale_rot, offsets], dim=-1)
-    # masked = concatenated_all[mask]
-    # scaling_repeat, repeat_anchor, color, scale_rot, offsets = masked.split([6, 3, 3, 7, 3], dim=-1)
-    
-    # # post-process cov
-    # scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3]) # * (1+torch.sigmoid(repeat_dist))
-    # rot = pc.rotation_activation(scale_rot[:,3:7])
-    
-    # # post-process offsets to get centers for gaussians
-    # offsets = offsets * scaling_repeat[:,:3]
-    # xyz = repeat_anchor + offsets
-
-    # if is_training:
-    #     return xyz, color, opacity, scaling, rot, neural_opacity, mask
-    # else:
-    #     return xyz, color, opacity, scaling, rot
-
-# def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
-#     ## view frustum filtering for acceleration    
-#     if visible_mask is None:
-#         visible_mask = torch.ones(pc.get_anchor.shape[0], dtype=torch.bool, device = pc.get_anchor.device)
-    
-#     feat = pc._anchor_feat[visible_mask]
-#     anchor = pc.get_anchor[visible_mask]
-#     grid_offsets = pc._offset[visible_mask]
-#     grid_scaling = pc.get_scaling[visible_mask]
-
-#     ## get view properties for anchor
-#     ob_view = anchor - viewpoint_camera.camera_center
-#     # dist
-#     ob_dist = ob_view.norm(dim=1, keepdim=True)
-#     # view
-#     ob_view = ob_view / ob_dist
-
-#     ## view-adaptive feature
-#     # print(pc.use_feat_bank)
-#     # if pc.use_feat_bank:
-#     #     cat_view = torch.cat([ob_view, ob_dist], dim=1)
-        
-#     #     bank_weight = pc.get_featurebank_mlp(cat_view).unsqueeze(dim=1) # [n, 1, 3]
-
-#     #     ## multi-resolution feat
-#     #     feat = feat.unsqueeze(dim=-1)
-#     #     feat = feat[:,::4, :1].repeat([1,4,1])*bank_weight[:,:,:1] + \
-#     #         feat[:,::2, :1].repeat([1,2,1])*bank_weight[:,:,1:2] + \
-#     #         feat[:,::1, :1]*bank_weight[:,:,2:]
-#     #     feat = feat.squeeze(dim=-1) # [n, c] 这里scaffold-gs只用了rgb，我们希望包含dc和sh
-
-#     if pc.add_opacity_dist or pc.add_color_dist or pc.add_cov_dist:
-#         cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1) # [N, c+3+1]
-#     else:
-#         cat_local_view_wodist = torch.cat([feat, ob_view], dim=1) # [N, c+3]
-#     if pc.appearance_dim > 0:
-#         camera_indicies = torch.ones_like(cat_local_view_wodist[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
-#         # camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * 10
-#         appearance = pc.get_appearance(camera_indicies)
-    
-    
-#     if pc.add_opacity_dist or pc.add_color_dist or pc.add_cov_dist:
-#         cat_local_view = torch.cat([cat_local_view, appearance], dim=1) 
-#         out = pc.big_head(cat_local_view)
-#     else:
-#         cat_local_view_wodist = torch.cat([cat_local_view_wodist, appearance], dim=1) 
-#         out = pc.big_head(cat_local_view_wodist)
-    
-#     out = pc.get_big_head(cat_local_view_wodist)
-#     k = pc.n_offsets
-#     opacity_logits = out[:, :k]                 # [N, k]
-#     color_flat     = out[:, k:k+3*k]            # [N, 3k]
-#     cov_flat       = out[:, k+3*k:k+3*k+7*k]    # [N, 7k]
-
-#     # 直接 reshape 成 [N*k, :]
-#     color  = color_flat.reshape(-1, 3)             # [N*k, 3]
-#     scale_rot = cov_flat.reshape(-1, 7)            # [N*k, 7]
-
-#     # opacity/掩码
-#     neural_opacity = opacity_logits.reshape(-1, 1)  # [N*k, 1]
-#     mask = neural_opacity.squeeze(1) > 0
-#     opacity = neural_opacity[mask]
-    
-    
-    
-    
-    
-    
-#     # if pc.appearance_dim > 0:
-#     #     camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
-#     #     # camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * 10
-#     #     appearance = pc.get_appearance(camera_indicies)
-
-#     # # get offset's opacity
-#     # if pc.add_opacity_dist:
-#     #     neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
-#     # else:
-#     #     neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
-
-#     # # opacity mask generation
-#     # neural_opacity = neural_opacity.reshape([-1, 1])
-#     # mask = (neural_opacity > 0.0)
-#     # mask = mask.view(-1)
-
-#     # # select opacity 
-#     # opacity = neural_opacity[mask]
-
-#     # # get offset's color
-#     # if pc.appearance_dim > 0:
-#     #     if pc.add_color_dist:
-#     #         color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
-#     #     else:
-#     #         color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
-#     # else:
-#     #     if pc.add_color_dist:
-#     #         color = pc.get_color_mlp(cat_local_view)
-#     #     else:
-#     #         color = pc.get_color_mlp(cat_local_view_wodist)
-#     # color = color.reshape([anchor.shape[0] * pc.n_offsets, 3])# [mask]
-
-#     # # get offset's cov
-#     # if pc.add_cov_dist:
-#     #     scale_rot = pc.get_cov_mlp(cat_local_view)
-#     # else:
-#     #     scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
-#     # scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
-    
-#     # offsets
-#     offsets = grid_offsets.view([-1, 3]) # [mask]
-    
-#     # combine for parallel masking
-#     concatenated = torch.cat([grid_scaling, anchor], dim=-1)
-#     concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
-#     concatenated_all = torch.cat([concatenated_repeated, color, scale_rot, offsets], dim=-1)
-#     masked = concatenated_all[mask]
-#     scaling_repeat, repeat_anchor, color, scale_rot, offsets = masked.split([6, 3, 3, 7, 3], dim=-1)
-    
-#     # post-process cov
-#     scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3]) # * (1+torch.sigmoid(repeat_dist))
-#     rot = pc.rotation_activation(scale_rot[:,3:7])
-    
-#     # post-process offsets to get centers for gaussians
-#     offsets = offsets * scaling_repeat[:,:3]
-#     xyz = repeat_anchor + offsets
-
-#     if is_training:
-#         return xyz, color, opacity, scaling, rot, neural_opacity, mask
-#     else:
-#         return xyz, color, opacity, scaling, rot
-
 def render(viewpoint_camera, 
            pc : GaussianModel, 
            pipe, bg_color : torch.Tensor, 
@@ -368,27 +217,6 @@ def render(viewpoint_camera,
         scales = scaling
         rotations = rot
 
-    # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
-    # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
-    # shs = None
-    # colors_precomp = None
-    # if override_color is None:
-    #     if pipe.convert_SHs_python:
-    #         shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-    #         dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-    #         dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-    #         sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-    #         colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-    #     else:
-    #         if separate_sh:
-    #             dc, shs = pc.get_features_dc, pc.get_features_rest
-    #         else:
-    #             shs = pc.get_features
-    # else:
-    #     colors_precomp = override_color
-
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    
     if separate_sh:
         rendered_image, radii, depth_image, _ = rasterizer(
             means3D = xyz,
@@ -648,7 +476,8 @@ def render_origin(viewpoint_camera,
                   cam_rot_delta=None,
                   cam_trans_delta=None,
                   get_flag=False,
-                  metric_map=None
+                  metric_map=None,
+                  train_cameras=None
                   ):
     """
     Render the scene. 
@@ -752,9 +581,33 @@ def render_origin(viewpoint_camera,
         
     # Apply exposure to rendered image (training only)
     if use_trained_exp:
-        exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
-        rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
-
+        if not viewpoint_camera.is_test_view:
+            exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
+            rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
+        else: # 测试脚本的exposure用空间域插值
+            c2w_test = torch.inverse(viewpoint_camera.world_view_transform.T)
+            for i in range(len(train_cameras)):
+                # 用罗德里格森公式度量旋转矩阵的距离，并考虑欧氏距离，选出离c2w_test最近的k个train camera，并根据距离倒数加权平均exposure
+                # 这样可以避免将测试图片加入训练集
+                c2w_train = torch.inverse(train_cameras[i].world_view_transform.T)
+                rot_diff = c2w_test[:3, :3] @ c2w_train[:3, :3].T
+                angle = torch.acos(torch.clamp((torch.trace(rot_diff) - 1) / 2, -1.0, 1.0))
+                trans_diff = c2w_test[:3, 3] - c2w_train[:3, 3]
+                dist = torch.norm(trans_diff) + angle * 0.1 # 旋转和平移的权重可调
+                if i == 0:
+                    dists = dist.unsqueeze(0)
+                    exps = pc.get_exposure_from_name(train_cameras[i].image_name).unsqueeze(0)
+                else:
+                    dists = torch.cat([dists, dist.unsqueeze(0)], dim=0)
+                    exps = torch.cat([exps, pc.get_exposure_from_name(train_cameras[i].image_name).unsqueeze(0)], dim=0)
+            k = min(5, len(train_cameras))
+            dists_k, idxs = torch.topk(dists, k, largest=False)
+            weights = 1.0 / (dists_k + 1e-8)
+            weights = weights / weights.sum()
+            exposure = (exps[idxs].T * weights).T.sum(dim=0)
+            
+            
+            rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     rendered_image = rendered_image.clamp(0, 1)

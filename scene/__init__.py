@@ -31,7 +31,7 @@ class Scene:
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
-
+        self.pipe = pipe
         if load_iteration:
             if load_iteration == -1:
                 self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
@@ -96,10 +96,17 @@ class Scene:
                 self.gaussians.create_from_pcd(FF_gaussians._xyz, self.cameras_extent) # embedding在gaussian model中声明
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+        elif self.loaded_iter and not pipe.useScaffold:
+            self.gaussians.load_ply(os.path.join(self.model_path,
+                                                "point_cloud",
+                                                "iteration_" + str(self.loaded_iter),
+                                                "point_cloud.ply"))
+            pass
         else:
             if FF_gaussians is not None:
                 self.gaussians = FF_gaussians
-                self.gaussians.set_appearance(scene_info.train_cameras)
+                if args.train_test_exp:
+                    self.gaussians.set_appearance(scene_info.train_cameras)
                 
             else:
                 self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent, self.cameras_extent)
@@ -107,10 +114,9 @@ class Scene:
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
-        try:
+        if self.pipe.useScaffold:
             self.gaussians.save_mlp_checkpoints(point_cloud_path)
-        except:
-            pass
+
         # exposure_dict = {
         #     image_name: self.gaussians.get_exposure_from_name(image_name).detach().cpu().numpy().tolist()
         #     for image_name in self.gaussians.exposure_mapping

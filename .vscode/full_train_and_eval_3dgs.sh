@@ -4,18 +4,18 @@
 
 CASES=(
     1747834320424
-    1748153841908
-    1748165890960
-    1748242779841
-    1748243104741
-    1749449291156
-    1749606908096
-    1749803955124
-    1750578027423
-    1750824904001
-    1750825558261
-    1750846199351
-    1751090600427
+    # 1748153841908
+    # 1748165890960
+    # 1748242779841
+    # 1748243104741
+    # 1749449291156
+    # 1749606908096
+    # 1749803955124
+    # 1750578027423
+    # 1750824904001
+    # 1750825558261
+    # 1750846199351
+    # 1751090600427
 )
 
 
@@ -54,8 +54,8 @@ FF_downsample=16 # 对anySplat的点下采样倍数，用于充当anchor
 opacity_lr=0.02 # 0.02
 scaling_lr=0.007 # 0.007
 rotation_lr=0.002 # 0.002
-feature_dc_lr=0.01 # 0.0025
-feature_rest_lr=0.0005 # 0.005
+feature_dc_lr=0.01 # 0.01
+feature_rest_lr=0.0005 # 0.0005
 xyz_lr_init=0.00016 # 0.00016
 xyz_lr_final=0.000016 # 0.000016
 max_n_gaussian=3000000
@@ -90,7 +90,8 @@ for case in "${CASES[@]}"; do
     # mono_depth $root_dir $model_dir
 
     if [ -d "$model_dir/test" ]; then
-        rm -r "$model_dir/test"
+        rm -rf "$model_dir/test"
+        # rm -rf "$model_dir/point_cloud"
     fi
     ANY_SPLAT_VGGT_WEIGHTS=$VGGT_PATH CUDA_VISIBLE_DEVICES=$device python \
         train_dash.py -s \
@@ -118,7 +119,8 @@ for case in "${CASES[@]}"; do
         --log_file $LOG_FILE \
         --max_n_gaussian $max_n_gaussian \
         --iterations $iterations \
-        --useFF 
+        --useFF
+        # --train_test_exp
         # --use_feat_bank true\
         # -m debugpy --wait-for-client --listen localhost:5685 \
         # -m debugpy --wait-for-client --listen localhost:5684 \

@@ -158,6 +158,7 @@ class OptimizationParams(ParamGroup):
         self.success_threshold = 0.8
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
+        self.use_pose_optimization = False
         self.densify_until_iter = 15_000
         self.densify_grad_threshold = 0.0002
         self.depth_l1_weight_init = 1.0

@@ -148,7 +148,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
         
 if __name__ == "__main__":
     parser = ArgumentParser(description="transforming")
-    parser.add_argument('--load_ply', type=str, required=True)
+    # parser.add_argument('--load_ply', type=str, required=True)
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
@@ -168,13 +168,16 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     args = parser.parse_args(sys.argv[1:])
     dataset, opt, pipe = lp.extract(args), op.extract(args), pp.extract(args)
-    scaffold_gs = GaussianModel(n_offsets=dataset.n_offsets)
-    # vanilla_gs = GaussianModel_origin(4, "sparse_adam")
-    scene = Scene(dataset, scaffold_gs, pipe, shuffle=False)
-    scaffold_gs.load_mlp_checkpoints(args.load_ply)
-    scaffold_gs.load_ply_sparse_gaussian(os.path.join(args.load_ply, "point_cloud.ply"))
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    if pipe.useScaffold:
+        gaussians = GaussianModel(n_offsets=dataset.n_offsets)
+    else:
+        gaussians = GaussianModel_origin(4, "sparse_adam")
+    
+    # vanilla_gs = GaussianModel_origin(4, "sparse_adam")
+    scene = Scene(dataset, gaussians, pipe, load_iteration=-1, shuffle=False)
+
     
     path = os.path.join(scene.model_path, "global_transform.txt")
     with open(path, "r") as f:
@@ -182,7 +185,6 @@ if __name__ == "__main__":
     # 转成 float tensor
     rows = [list(map(float, line.strip().split())) for line in lines]
     global_transform = torch.tensor(rows, dtype=torch.float32)
-    
     case_name = dataset.source_path.split("/")[-1]
     with torch.no_grad():
-        eval(case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), -1, 0, args.log_file, global_transform = global_transform, all_time=0.0)
+        eval(dataset, pipe, case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), -1, 0, args.log_file, global_transform = global_transform, all_time=0.0)

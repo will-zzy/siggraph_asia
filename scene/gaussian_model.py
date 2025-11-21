@@ -1340,6 +1340,7 @@ class GaussianModel_origin:
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
         self.exposure_mapping = {cam_info.image_name: idx for idx, cam_info in enumerate(cam_infos)}
         pass
+        self.exposure_optimizer = torch.optim.Adam([self._exposure])
         # if self.appearance_dim > 0:
         #     self.embedding_appearance = Embedding(num_cameras, self.appearance_dim).cuda()
 
@@ -1443,7 +1444,6 @@ class GaussianModel_origin:
                 # A special version of the rasterizer is required to enable sparse adam
                 self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
 
-        self.exposure_optimizer = torch.optim.Adam([self._exposure])
 
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.xyz_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.xyz_lr_final*self.spatial_lr_scale,

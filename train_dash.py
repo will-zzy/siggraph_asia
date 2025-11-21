@@ -213,8 +213,8 @@ def align_icp_with_sfm(
     gaussians._features_rest.data.copy_(features_extra.reshape((features_extra.shape[0],-1,3))); del features_extra
 
     # 可选：保存可视化或 .ply
-    if ply_path is not None:
-        gaussians.save_ply(ply_path)
+    # if ply_path is not None:
+    #     gaussians.save_ply(ply_path)
 
     # 可选：保存轨迹对齐图（此处用点云对齐，不再画轨迹）
     return T, stats, gaussians
@@ -505,8 +505,8 @@ def align(gaussians: GaussianModel_origin, anysplat_traj, slam_traj, ply_path=No
     # scales_np = scales.cpu().numpy()
     # rots_np = rots.cpu().numpy()
 
-    if ply_path is not None:
-        gaussians.save_ply(ply_path)
+    # if ply_path is not None:
+    #     gaussians.save_ply(ply_path)
 
     # Prepare debug outputs (plot + point clouds) to inspect alignment quality.
     try:
@@ -628,6 +628,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             gaussians = GaussianModel_origin(dataset.feat_dim, opt.optimizer_type)
             scene = Scene(dataset, gaussians, pipe, FF_gaussians, shuffle=False)
             gaussians = scene.gaussians
+        del FF_gaussians
+        torch.cuda.empty_cache()
     else:
         if pipe.useScaffold:
             pass
@@ -689,7 +691,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         torch.zeros(3, requires_grad=True, device=data_device)
     )
     global_transform = torch.eye(4, device=data_device)
-    
+    with open(os.path.join(scene.model_path, "global_transform.txt"), "w+") as f:
+        for row in global_transform.cpu().numpy():
+            f.write(" ".join([f"{x:.8f}" for x in row]) + "\n")
     l = [ 
         {'params': [cam_rot_delta], 'lr': 0.00002, "name": "pose_rot_delta"}, # 0.00008
         {'params': [cam_trans_delta], 'lr': 0.00001, "name": "pose_trans_delta"}, # 0.00005
@@ -741,7 +745,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], visible_mask=voxel_visible_mask, retain_grad=retain_grad, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)
             image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
         else:
-            render_pkg = render_origin(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:],retain_grad=retain_grad, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)
+            render_pkg = render_origin(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], retain_grad=retain_grad, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta)
             image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # if viewpoint_cam.alpha_mask is not None:
@@ -782,12 +786,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_end.record()
 
-        with torch.no_grad():
-            if iteration % 200 == 0:
-                image_write = image.permute(1,2,0).detach().cpu().numpy()
-                image_write = (image_write * 255).astype("uint8")
-                os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
-                cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
+        # with torch.no_grad():
+        #     if iteration % 200 == 0:
+        #         image_write = image.permute(1,2,0).detach().cpu().numpy()
+        #         image_write = (image_write * 255).astype("uint8")
+        #         os.makedirs(f"{scene.model_path}/test/", exist_ok = True)
+        #         cv2.imwrite(os.path.join(f"{scene.model_path}/test/", "iter{:06d}_{}.png".format(iteration, viewpoint_cam.image_name)), cv2.cvtColor(image_write, cv2.COLOR_RGB2BGR))
 
         
         
@@ -799,10 +803,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-            ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
+            # ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
             if iteration % 10 == 0:
-                if pipe.useFF:
+                if not pipe.useScaffold:
                     progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians._scaling.shape[0]}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
                 else:
                     progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{4}f}", "N_GS": f"{gaussians._scaling.shape[0] * dataset.n_offsets}", "N_MAX": f"{scheduler.max_n_gaussian}", "R": f"{render_scale}"})
@@ -840,8 +844,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (elapsed_time >= 60 and 60 in time_save_iterations) or iteration==opt.iterations:
                 print(f"\n[ITER {iteration}] Saving Gaussians at 60 seconds")
                 all_time = elapsed_time
-                eval(pipe, case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
-                scene.save(iteration)
+                eval(dataset, pipe, case_name, scene, render, render_origin, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), iteration, 60, log_file, global_transform, all_time)
+                point_cloud_path = os.path.join(scene.model_path, "point_cloud/iteration_{}/point_cloud.ply".format(iteration))
+                scene.gaussians.save_ply(f"{point_cloud_path}")
                 time_save_iterations.remove(60)  # 移除已保存的时间点，避免重复保存
                 # 到60秒后退出训练
                 
@@ -948,8 +953,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
                 # Optimizer step
                 if iteration < opt.iterations:
-                    # gaussians.exposure_optimizer.step()
-                    # gaussians.exposure_optimizer.zero_grad(set_to_none = True)
+                    if dataset.train_test_exp:
+                        gaussians.exposure_optimizer.step()
+                        gaussians.exposure_optimizer.zero_grad(set_to_none = True)
                     if use_sparse_adam:
                         visible = radii > 0
                         gaussians.optimizer.step(visible, radii.shape[0])
@@ -963,7 +969,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                     pose_optimizer.step()
                     pose_optimizer.zero_grad(set_to_none=True)
             
-            if iteration > 5000000 and iteration % 300 == 0 and iteration < opt.densify_until_iter :
+            if iteration > opt.densify_from_iter and iteration % 300 == 0 and iteration < opt.densify_until_iter and opt.use_pose_optimization:
                 # update_pose(viewpoint_cam)
                 update_global=True
                 for view in scene.getTrainCameras():
@@ -1055,7 +1061,7 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
             tb_writer.add_scalar('total_points', scene.gaussians.get_scaling.shape[0], iteration)
         torch.cuda.empty_cache()
         
-def eval(pipe, case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None, all_time=None):
+def eval(dataset, pipe, case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, iteration: int, time: int, log_file=None, global_transform=None, all_time=None):
     torch.cuda.empty_cache()
     config = {'name': 'test', 'cameras' : scene.getTestCameras()}
     (pipe, background, scale_factor, SPARSE_ADAM_AVAILABLE, overide_color, train_test_exp) = renderArgs
@@ -1071,7 +1077,7 @@ def eval(pipe, case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, it
                 voxel_visible_mask = prefilter_voxel(transform_viewpoint, scene.gaussians, pipe, background, 1.0, None)
                 image = torch.clamp(renderFunc(transform_viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
             else:
-                image = torch.clamp(renderFunc2(transform_viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0) 
+                image = torch.clamp(renderFunc2(transform_viewpoint, scene.gaussians, *renderArgs, train_cameras = scene.getTrainCameras() if train_test_exp else None)["render"], 0.0, 1.0) 
             # try:
             #     voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, pipe, background, 1.0, None)
             #     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
@@ -1080,9 +1086,9 @@ def eval(pipe, case_name, scene : Scene, renderFunc, renderFunc2, renderArgs, it
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
             # image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"], 0.0, 1.0)
             gt_image = torch.clamp(transform_viewpoint.original_image.to("cuda"), 0.0, 1.0)
-            if train_test_exp:
-                image = image[..., image.shape[-1] // 2:]
-                gt_image = gt_image[..., gt_image.shape[-1] // 2:]
+            # if train_test_exp:
+            #     image = image[..., image.shape[-1] // 2:]
+            #     gt_image = gt_image[..., gt_image.shape[-1] // 2:]
             l1_test += l1_loss(image, gt_image).mean().double()
             psnr_test += psnr(image, gt_image).mean().double()
             lpips_test += lpips_fn(image, gt_image).mean().double()
