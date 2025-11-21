@@ -50,10 +50,10 @@ Also download the following weights/configs:
 ### 0.2.quicikly start
 
 
-Edit .vscode/full_train_and_eval.sh:
+Edit `.vscode/full_train_and_eval.sh`:
 
->Set `BASE_DIR` to the root directory containing all 13 scenes.<br>
->Set `EXP_DIR` to your experiment output directory.<br>
+>Set `BASE_DIR` to the **root directory** containing all 13 scenes.<br>
+>Set `EXP_DIR` to your experiment **output directory**.<br>
 >Set `NAME` to the experiment name.
 
 Then run training for all scenes:
@@ -63,7 +63,7 @@ chmod +x .vscode/full_train_and_eval.sh
 .vscode/full_train_and_eval.sh
 ```
 
-Per-scene quantitative results are aggregated in `${EXP_DIR}/metrics.json`, which records the rendering metrics and training time for all scenes.
+Per-scene quantitative results are aggregated in `${EXP_DIR}/metrics_train.json`, which records the rendering metrics and training time for all scenes.
 
 Directory layout example:
 
@@ -81,6 +81,12 @@ Directory layout example:
         └── train_test_split.json
 ```
 
+**Heads-up on hardware variability**  
+-**Rare VRAM out-of-bounds on RTX 4090**. We observed a very small probability (~**1.4%**) of a memory out-of-bounds issue on 4090 GPUs, which we believe is caused by excessive VRAM pressure. **If this occurs, please re-run the affected scene—in our tests, the issue is non-deterministic and typically disappears on retry**.  <br>
+
+-We don’t know the number of CPU cores on your test machine, and this impacts our effective training schedule. On our hardware, we used **15,000 iterations** by default and obtained an **average PSNR of 28.30** with an **average runtime of 51 s**.
+If your CPU has **fewer cores** and training slows down (making it **hard to reproduce similar results**), we recommend **trying 12,000 iterations** instead (set the iterations parameter in the training script), or being free to contact with us.
+
 
 ## 1.Evaluation
 
@@ -94,7 +100,7 @@ Use `.vscode/full_eval.sh` and edit:
 chmod +x .vscode/full_eval.sh
 .vscode/full_eval.sh
 ```
-Please refer to `metrics.json` for the final time metrics, and `metrics_PSNR.json` for the rendering metrics.
+Please refer to `metrics.json` for the final time metrics and PSNR metrics.
 
 
 

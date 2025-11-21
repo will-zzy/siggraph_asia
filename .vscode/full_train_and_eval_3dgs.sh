@@ -41,14 +41,11 @@ VGGT_PATH=$(pwd)/vggt
 densify_grad_threshold=0.0002
 
 
-feat_dim=64
-n_offsets=10 # 每个anchor的子高斯数
-
 densify_until_iter=5000
 densify_from_iter=500
 densification_interval=100
-# FF_downsample=100000 # 对anySplat的点下采样倍数，用于充当anchor
-FF_downsample=16 # 对anySplat的点下采样倍数，用于充当anchor
+
+FF_downsample=16 # 对anySplat的点下采样倍数
 
 
 opacity_lr=0.01 # 0.02
