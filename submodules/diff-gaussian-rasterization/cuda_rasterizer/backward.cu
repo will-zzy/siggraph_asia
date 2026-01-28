@@ -569,46 +569,6 @@ __global__ void preprocessCUDA(
 		dL_dtau[6 * idx + i] += dL_dt[i];
 	}
 
-	// Compute gradient update due to computing depths
-	// p_orig = m
-	// p_view = transformPoint4x3(p_orig, viewmatrix);
-	// depth = p_view.z;
-
-
-
-	// maybe add the gradient from depth
-	// float dL_dpCz = dL_ddepth[idx];
-	// dL_dmeans[idx].x += dL_dpCz * viewmatrix[2];
-	// dL_dmeans[idx].y += dL_dpCz * viewmatrix[6];
-	// dL_dmeans[idx].z += dL_dpCz * viewmatrix[10];
-
-	// for (int i = 0; i < 3; i++) {
-	// 	float3 c_rho = dp_C_d_rho.cols[i];
-	// 	float3 c_theta = dp_C_d_theta.cols[i];
-	// 	dL_dtau[6 * idx + i] += dL_dpCz * c_rho.z;
-	// 	dL_dtau[6 * idx + i + 3] += dL_dpCz * c_theta.z;
-	// }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 	// Compute gradient updates due to computing colors from SHs
 	if (shs)
 		computeColorFromSH(idx, D, M, (glm::vec3*)means, *campos, dc, shs, clamped, (glm::vec3*)dL_dcolor, (glm::vec3*)dL_dmeans, (glm::vec3*)dL_ddc, (glm::vec3*)dL_dsh, dL_dtau);

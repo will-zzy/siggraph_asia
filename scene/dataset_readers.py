@@ -145,6 +145,7 @@ def fetchPly(path):
         colors = np.random.rand(positions.shape[0], positions.shape[1])
     normals = np.vstack([vertices['nx'], vertices['ny'], vertices['nz']]).T
     return BasicPointCloud(points=positions, colors=colors, normals=normals)
+
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array
     dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
@@ -178,7 +179,7 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
     
     train_test_split_path = os.path.join(path, "train_test_split.json")
     with open(train_test_split_path, 'r') as f:
-        train_test_exp = json.load(f)
+        train_test_split = json.load(f)
     ## if depth_params_file isnt there AND depths file is here -> throw error
     depths_params = None
     if depths != "":
@@ -200,7 +201,8 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
             print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
             sys.exit(1)
 
-    test_cam_names_list = train_test_exp["test"]
+    test_cam_names_list = train_test_split["test"]
+    
     # if eval:
     #     if "360" in path:
     #         llffhold = 8
@@ -222,12 +224,8 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
         depths_folder=os.path.join(path, depths) if depths != "" else "", test_cam_names_list=test_cam_names_list)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    # train_cam_infos = [c for c in cam_infos if train_test_exp or not c.is_test]
     train_cam_infos = [c for c in cam_infos if not c.is_test]
     test_cam_infos = [c for c in cam_infos if c.is_test]
-    # test_cam_infos = []
-    # test_cam_infos = [c for id, c in enumerate(cam_infos) if (id+2) % 1 == 0]
-    # test_cam_infos=[c for c in cam_infos]
 
     nerf_normalization = getNerfppNorm(train_cam_infos)
 

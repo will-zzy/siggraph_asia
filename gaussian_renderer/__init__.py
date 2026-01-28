@@ -13,332 +13,27 @@ import torch
 from einops import repeat
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
-from scene.gaussian_model import GaussianModel, GaussianModel_origin
+from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 
 
-
-def chunked(f, x, chunks=2):
-    n = x.shape[0]
-    outs = []
-    for i in range(0, n, (n+chunks-1)//chunks):
-        outs.append(f(x[i:i+((n+chunks-1)//chunks)]))
-    return torch.cat(outs, dim=0)
-
-
-def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
-    ## view frustum filtering for acceleration    
-    if visible_mask is None:
-        visible_mask = torch.ones(pc.get_anchor.shape[0], dtype=torch.bool, device = pc.get_anchor.device)
-    
-    feat = pc._anchor_feat[visible_mask]
-    anchor = pc.get_anchor[visible_mask]
-    grid_offsets = pc._offset[visible_mask]
-    grid_scaling = pc.get_scaling[visible_mask]
-
-    ## get view properties for anchor
-    ob_view = anchor - viewpoint_camera.camera_center
-    # dist
-    ob_dist = ob_view.norm(dim=1, keepdim=True)
-    # view
-    ob_view = ob_view / ob_dist
-
-    ## view-adaptive feature
-    # print(pc.use_feat_bank)
-    # if pc.use_feat_bank:
-    #     cat_view = torch.cat([ob_view, ob_dist], dim=1)
-        
-    #     bank_weight = pc.get_featurebank_mlp(cat_view).unsqueeze(dim=1) # [n, 1, 3]
-
-    #     ## multi-resolution feat
-    #     feat = feat.unsqueeze(dim=-1)
-    #     feat = feat[:,::4, :1].repeat([1,4,1])*bank_weight[:,:,:1] + \
-    #         feat[:,::2, :1].repeat([1,2,1])*bank_weight[:,:,1:2] + \
-    #         feat[:,::1, :1]*bank_weight[:,:,2:]
-    #     feat = feat.squeeze(dim=-1) # [n, c] 这里scaffold-gs只用了rgb，我们希望包含dc和sh
-
-
-    if pc.add_opacity_dist or pc.add_cov_dist or pc.add_color_dist: # anchor如果不变的话这两个变量可以缓存
-        cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1) # [N, c+3+1]
-    else:
-        
-        cat_local_view_wodist = torch.cat([feat, ob_view], dim=1) # [N, c+3]
-        
-        
-    if pc.appearance_dim > 0:
-        cam_idx = torch.full((feat.size(0),), viewpoint_camera.uid,
-                             dtype=torch.long, device=anchor.device)
-        appearance = pc.get_appearance(cam_idx)   
-
-    # get offset's opacity
-    if pc.add_opacity_dist:
-        # neural_opacity = chunked(pc.get_opacity_mlp, cat_local_view) # anchor较少时用chunk反而会下降
-        neural_opacity = pc.get_opacity_mlp(cat_local_view).float() # [N, k]
-    else:
-        # neural_opacity = chunked(pc.get_opacity_mlp, cat_local_view_wodist)
-        neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist).float()
-
-    # opacity mask generation
-    neural_opacity = neural_opacity.reshape([-1, 1])
-    neural_opacity_flat = neural_opacity.reshape(-1, 1)
-    mask = (neural_opacity > 0.0)
-    # mask = mask.view(-1)
-    mask = (neural_opacity_flat > 0.0).squeeze(1)
-    idx  = mask.nonzero(as_tuple=False).squeeze(1)  
-
-    # select opacity 
-    opacity = neural_opacity[mask]
-
-    # get offset's color
-    if pc.appearance_dim > 0:
-        if pc.add_color_dist:
-            # color = chunked(pc.get_color_mlp, torch.cat([cat_local_view, appearance], dim=1))
-            color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1)).float()
-        else:
-            # color = chunked(pc.get_color_mlp, torch.cat([cat_local_view_wodist, appearance], dim=1))
-            color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1)).float()
-    else:
-        if pc.add_color_dist:
-            # color = chunked(pc.get_color_mlp, cat_local_view)
-            color = pc.get_color_mlp(cat_local_view).float()
-        else:
-            # color = chunked(pc.get_color_mlp, cat_local_view_wodist)
-            color = pc.get_color_mlp(cat_local_view_wodist).float()
-    color = color.reshape([anchor.shape[0] * pc.n_offsets, 3])# [mask]
-
-    # get offset's cov
-    if pc.add_cov_dist:
-        # scale_rot = chunked(pc.get_cov_mlp, cat_local_view)
-        scale_rot = pc.get_cov_mlp(cat_local_view).float()
-    else:
-        # scale_rot = chunked(pc.get_cov_mlp, cat_local_view_wodist)
-        scale_rot = pc.get_cov_mlp(cat_local_view_wodist).float()
-    scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
-    
-    # offsets
-    # offsets = grid_offsets.view([-1, 3]) # [mask]
-    # 6) offsets / anchors / scaling 的“按需展开 + gather”
-    N, k = grid_offsets.shape[:2]
-    # (a) offsets => [N*k, 3]
-    offsets_flat = grid_offsets.reshape(-1, 3)
-    anchor_rep = anchor.repeat_interleave(k, dim=0)  
-    scaling_rep = grid_scaling.repeat_interleave(k, dim=0) # [N*k, 6]
-    opacity = neural_opacity_flat[idx]                     # [M, 1]
-    color   = color.index_select(0, idx)                   # [M, 3]
-    sr_sel  = scale_rot.index_select(0, idx)               # [M, 7]
-    off_sel = offsets_flat.index_select(0, idx)            # [M, 3]
-    anc_sel = anchor_rep.index_select(0, idx)              # [M, 3]
-    scl_sel = scaling_rep.index_select(0, idx)    
-    
-    
-    scaling = scl_sel[:, 3:] * torch.sigmoid(sr_sel[:, :3])    # [M, 3]
-    rot     = pc.rotation_activation(sr_sel[:, 3:7])           # [M, 4] or whatever
-    # offsets -> xyz
-    off_scaled = off_sel * scl_sel[:, :3]
-    xyz = anc_sel + off_scaled                                  # [M, 3]
-
-    if is_training:
-        return xyz, color, opacity, scaling, rot, neural_opacity_flat, mask
-    else:
-        return xyz, color, opacity, scaling, rot
-    
-def render(viewpoint_camera, 
-           pc : GaussianModel, 
-           pipe, bg_color : torch.Tensor, 
-           scaling_modifier = 1.0, 
-           separate_sh = False, 
-           override_color = None, # 恒为none，但scaffold-gs会直接从网络中算出来
-           use_trained_exp=False, 
-           render_size=None, 
-           visible_mask=None, 
-           retain_grad=False,
-           cam_rot_delta=None,
-           cam_trans_delta=None
-           ):
-    """
-    Render the scene. 
-    
-    Background tensor (bg_color) must be on GPU!
-    """
-    # is_training = pc.get_big_head.training
-    is_training = pc.get_color_mlp.training
-        
-    if is_training:
-        xyz, color, opacity, scaling, rot, neural_opacity, mask = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
-    else:
-        xyz, color, opacity, scaling, rot = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
-    screenspace_points = torch.zeros([xyz.shape[0], 6], dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
-    if retain_grad:
-        try:
-            screenspace_points.retain_grad()
-        except:
-            pass
-
-
-    # Set up rasterization configuration
-    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
-    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-
-    raster_settings = GaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height) if render_size is None else render_size[0],
-        image_width=int(viewpoint_camera.image_width) if render_size is None else render_size[1],
-        tanfovx=tanfovx,
-        tanfovy=tanfovy,
-        bg=bg_color,
-        scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
-        projmatrix_raw=viewpoint_camera.projection_matrix,
-        # sh_degree=pc.active_sh_degree,
-        sh_degree=1, # 可以不用球谐
-        campos=viewpoint_camera.camera_center,
-        prefiltered=False,
-        debug=pipe.debug,
-        antialiasing=pipe.antialiasing,
-        get_flag=False,
-        metric_map=None
-    )
-
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
-
-    # means3D = pc.get_xyz
-    # means2D = screenspace_points
-    # opacity = pc.get_opacity
-
-    # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
-    # scaling / rotation by the rasterizer.
-    scales = None
-    rotations = None
-    cov3D_precomp = None
-
-    if pipe.compute_cov3D_python:
-        cov3D_precomp = pc.get_covariance(scaling_modifier)
-    else:
-        scales = scaling
-        rotations = rot
-
-    if separate_sh:
-        rendered_image, radii, depth_image, _ = rasterizer(
-            means3D = xyz,
-            means2D = screenspace_points,
-            # dc = dc,
-            # shs = shs,
-            dc = None,
-            shs = None,
-            # colors_precomp = colors_precomp,
-            colors_precomp = color,
-            opacities = opacity,
-            scales = scales,
-            rotations = rotations,
-            cov3D_precomp = None,
-            theta=cam_rot_delta,
-            rho=cam_trans_delta)
-    else:
-        rendered_image, radii, depth_image, _ = rasterizer(
-            means3D = xyz,
-            means2D = screenspace_points,
-            # shs = shs,
-            # colors_precomp = colors_precomp,
-            shs = None,
-            colors_precomp = color,
-            opacities = opacity,
-            scales = scales,
-            rotations = rotations,
-            cov3D_precomp = None,
-            theta=cam_rot_delta,
-            rho=cam_trans_delta)
-        
-    # Apply exposure to rendered image (training only)
-    # if use_trained_exp:
-    #     exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
-    #     rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
-
-    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
-    # They will be excluded from value updates used in the splitting criteria.
-    rendered_image = rendered_image.clamp(0, 1)
-    out = {
-        "render": rendered_image,
-        "viewspace_points": screenspace_points,
-        "visibility_filter" : (radii > 0),
-        "radii": radii,
-        "selection_mask": mask if is_training else None,
-        "neural_opacity": neural_opacity if is_training else None,
-        "scaling": scaling,
-        "depth" : depth_image
-        }
-    
-    return out
-
-
-
-def prefilter_voxel(viewpoint_camera, 
-                    pc : GaussianModel, 
-                    pipe, 
-                    bg_color : torch.Tensor, 
-                    scaling_modifier = 1.0, 
-                    override_color = None):
-    """
-    Render the scene. 
-    
-    Background tensor (bg_color) must be on GPU!
-    """
-    # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    
-    screenspace_points = torch.zeros_like(pc.get_anchor, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
-    try:
-        screenspace_points.retain_grad()
-    except:
-        pass
-
-    # Set up rasterization configuration
-    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
-    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-
-    raster_settings = GaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height),
-        image_width=int(viewpoint_camera.image_width),
-        tanfovx=tanfovx,
-        tanfovy=tanfovy,
-        bg=bg_color,
-        scale_modifier=scaling_modifier,
-        viewmatrix = viewpoint_camera.world_view_transform,
-        projmatrix = viewpoint_camera.full_proj_transform,
-        projmatrix_raw = viewpoint_camera.projection_matrix,
-        sh_degree=1,
-        campos=viewpoint_camera.camera_center,
-        prefiltered=False,
-        debug=pipe.debug,
-        antialiasing=True,
-        get_flag=False,
-        metric_map=None
-    )
-
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
-
-    means3D = pc.get_anchor
-
-
-    # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
-    # scaling / rotation by the rasterizer.
-    scales = None
-    rotations = None
-    cov3D_precomp = None
-    if pipe.compute_cov3D_python:
-        cov3D_precomp = pc.get_covariance(scaling_modifier)
-    else:
-        scales = pc.get_scaling
-        rotations = pc.get_rotation
-
-    radii_pure = rasterizer.visible_filter(means3D = means3D,
-        scales = scales[:,:3],
-        rotations = rotations,
-        cov3D_precomp = cov3D_precomp)
-
-    return radii_pure > 0
-
-
-
-def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, separate_sh = False, override_color = None, use_trained_exp=False, render_size=None):
+def render(
+    viewpoint_camera,
+    pc: GaussianModel,
+    pipe,
+    bg_color: torch.Tensor,
+    scaling_modifier=1.0,
+    separate_sh=False,
+    override_color=None,
+    use_trained_exp=False,
+    render_size=None,
+    retain_grad=False,
+    cam_rot_delta=None,
+    cam_trans_delta=None,
+    get_flag=False,
+    metric_map=None,
+    train_cameras=None,
+):
     """
     Render the scene. 
     
@@ -346,147 +41,7 @@ def render_simp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Ten
     """
  
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
-    try:
-        screenspace_points.retain_grad()
-    except:
-        pass
-
-    # Set up rasterization configuration
-    tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
-    tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-
-    raster_settings = GaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height) if render_size is None else render_size[0],
-        image_width=int(viewpoint_camera.image_width) if render_size is None else render_size[1],
-        tanfovx=tanfovx,
-        tanfovy=tanfovy,
-        bg=bg_color,
-        scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
-        projmatrix_raw=viewpoint_camera.projection_matrix,
-        sh_degree=pc.active_sh_degree,
-        campos=viewpoint_camera.camera_center,
-        prefiltered=False,
-        debug=pipe.debug,
-        antialiasing=pipe.antialiasing,
-        get_flag=False,
-        metric_map=None
-    )
-
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
-
-    means3D = pc.get_xyz
-    means2D = screenspace_points
-    opacity = pc.get_opacity
-
-    # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
-    # scaling / rotation by the rasterizer.
-    scales = None
-    rotations = None
-    cov3D_precomp = None
-
-    if pipe.compute_cov3D_python:
-        cov3D_precomp = pc.get_covariance(scaling_modifier)
-    else:
-        scales = pc.get_scaling
-        rotations = pc.get_rotation
-
-    # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
-    # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
-    shs = None
-    colors_precomp = None
-    if override_color is None:
-        if pipe.convert_SHs_python:
-            shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-            dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-            dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-            sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
-            colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
-        else:
-            if separate_sh:
-                dc, shs = pc.get_features_dc, pc.get_features_rest
-            else:
-                shs = pc.get_features
-    else:
-        colors_precomp = override_color
-
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    if separate_sh:
-        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
-            means3D = means3D,
-            means2D = means2D,
-            dc = dc,
-            shs = shs,
-            colors_precomp = colors_precomp,
-            opacities = opacity,
-            scales = scales,
-            rotations = rotations,
-            cov3D_precomp = cov3D_precomp,
-            theta=viewpoint_camera.cam_rot_delta,
-            rho=viewpoint_camera.cam_trans_delta)
-    else:
-        rendered_image, radii, depth_image, accum_metric_counts = rasterizer(
-            means3D = means3D,
-            means2D = means2D,
-            shs = shs,
-            colors_precomp = colors_precomp,
-            opacities = opacity,
-            scales = scales,
-            rotations = rotations,
-            cov3D_precomp = cov3D_precomp,
-            theta=viewpoint_camera.cam_rot_delta,
-            rho=viewpoint_camera.cam_trans_delta)
-        
-    # Apply exposure to rendered image (training only)
-    if use_trained_exp:
-        exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
-        rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
-
-    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
-    # They will be excluded from value updates used in the splitting criteria.
-    rendered_image = rendered_image.clamp(0, 1)
-    out = {
-        "render": rendered_image,
-        "viewspace_points": screenspace_points,
-        "visibility_filter" : (radii > 0).nonzero(),
-        "radii": radii,
-        "depth" : depth_image,
-        "accum_metric_counts": accum_metric_counts
-        }
-    
-    return out
-
-    
-    
-    
-    
-    
-
-def render_origin(viewpoint_camera, 
-                  pc : GaussianModel, 
-                  pipe, bg_color : torch.Tensor, 
-                  scaling_modifier = 1.0, 
-                  separate_sh = False, 
-                  override_color = None, 
-                  use_trained_exp=False, 
-                  render_size=None,
-                  retain_grad=False,
-                  cam_rot_delta=None,
-                  cam_trans_delta=None,
-                  get_flag=False,
-                  metric_map=None,
-                  train_cameras=None
-                  ):
-    """
-    Render the scene. 
-    
-    Background tensor (bg_color) must be on GPU!
-    """
- 
-    # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros([pc.get_xyz.shape[0], 6], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda")
+    screenspace_points = torch.zeros([pc.get_xyz.shape[0], 6], dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0.
     try:
         screenspace_points.retain_grad()
     except:
@@ -583,41 +138,62 @@ def render_origin(viewpoint_camera,
     if use_trained_exp:
         if not viewpoint_camera.is_test_view:
             exposure = pc.get_exposure_from_name(viewpoint_camera.image_name)
-            rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
-        else: # 测试脚本的exposure用空间域插值
+            rendered_image = (
+                torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(
+                    2, 0, 1
+                )
+                + exposure[:3, 3, None, None]
+            )
+        else:
+            # The exposure for the test script is interpolated in the spatial domain
             c2w_test = torch.inverse(viewpoint_camera.world_view_transform.T)
             for i in range(len(train_cameras)):
-                # 用罗德里格森公式度量旋转矩阵的距离，并考虑欧氏距离，选出离c2w_test最近的k个train camera，并根据距离倒数加权平均exposure
-                # 这样可以避免将测试图片加入训练集
+                # Use Rodrigues' formula to measure the distance between rotation matrices, consider Euclidean distance,
+                # select the k nearest train cameras to c2w_test, and weight-average the exposure based on the inverse of the distance.
+                # This avoids adding test images to the training set.
                 c2w_train = torch.inverse(train_cameras[i].world_view_transform.T)
                 rot_diff = c2w_test[:3, :3] @ c2w_train[:3, :3].T
-                angle = torch.acos(torch.clamp((torch.trace(rot_diff) - 1) / 2, -1.0, 1.0))
+                angle = torch.acos(
+                    torch.clamp((torch.trace(rot_diff) - 1) / 2, -1.0, 1.0)
+                )
                 trans_diff = c2w_test[:3, 3] - c2w_train[:3, 3]
-                dist = torch.norm(trans_diff) + angle * 0.1 # 旋转和平移的权重可调
+                dist = (
+                    torch.norm(trans_diff) + angle * 0.1
+                )  # The weights for rotation and translation are adjustable
                 if i == 0:
                     dists = dist.unsqueeze(0)
-                    exps = pc.get_exposure_from_name(train_cameras[i].image_name).unsqueeze(0)
+                    exps = pc.get_exposure_from_name(
+                        train_cameras[i].image_name
+                    ).unsqueeze(0)
                 else:
                     dists = torch.cat([dists, dist.unsqueeze(0)], dim=0)
-                    exps = torch.cat([exps, pc.get_exposure_from_name(train_cameras[i].image_name).unsqueeze(0)], dim=0)
+                    exps = torch.cat(
+                        [
+                            exps,
+                            pc.get_exposure_from_name(
+                                train_cameras[i].image_name
+                            ).unsqueeze(0),
+                        ],
+                        dim=0,
+                    )
             k = min(5, len(train_cameras))
             dists_k, idxs = torch.topk(dists, k, largest=False)
             weights = 1.0 / (dists_k + 1e-8)
             weights = weights / weights.sum()
             exposure = (exps[idxs].T * weights).T.sum(dim=0)
             
-            
-            rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3,   None, None]
+            rendered_image = torch.matmul(rendered_image.permute(1, 2, 0), exposure[:3, :3]).permute(2, 0, 1) + exposure[:3, 3, None, None]
+    
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
     # They will be excluded from value updates used in the splitting criteria.
     rendered_image = rendered_image.clamp(0, 1)
     out = {
         "render": rendered_image,
         "viewspace_points": screenspace_points,
-        "visibility_filter" : (radii > 0).nonzero(),
+        "visibility_filter": (radii > 0).nonzero(),
         "radii": radii,
-        "depth" : depth_image,
+        "depth": depth_image,
         "accum_metric_counts": accum_metric_counts
-        }
+    }
     
     return out

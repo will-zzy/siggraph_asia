@@ -1,14 +1,8 @@
-
-
-
-
-
 from .loss_utils import l1_loss
 from fused_ssim import fused_ssim as fast_ssim
-from gaussian_renderer import render, prefilter_voxel, generate_neural_gaussians, render_origin
+from gaussian_renderer import render
 import torch
 import random
-# from train_dash import SPARSE_ADAM_AVAILABLE
 
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
@@ -95,9 +89,8 @@ def compute_gaussian_score_fastgs(camlist, gaussians, dataset, opt, pipe, bg, DE
     for view in range(len(camlist)):
         view_cam = camlist[view]
         gt_image = view_cam.original_image.cuda()
-        render_image = render_origin(view_cam, gaussians, pipe, bg, separate_sh=SPARSE_ADAM_AVAILABLE,
-                                     render_size=gt_image.shape[-2:], use_trained_exp=dataset.train_test_exp, 
-                                     retain_grad=False, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta,)["render"]
+        render_image = render(view_cam, gaussians, pipe, bg, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], use_trained_exp=dataset.train_test_exp, 
+                              retain_grad=False, cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta,)["render"]
         photometric_loss = compute_photometric_loss(view_cam, render_image)
 
         gt_image = view_cam.original_image.cuda()
@@ -106,11 +99,8 @@ def compute_gaussian_score_fastgs(camlist, gaussians, dataset, opt, pipe, bg, DE
         
         metric_map = (l1_loss_norm > opt.loss_thresh).int().contiguous()
 
-        render_pkg = render_origin(view_cam, 
-                                   gaussians, pipe, bg, separate_sh=SPARSE_ADAM_AVAILABLE,
-                                   render_size=gt_image.shape[-2:], use_trained_exp=dataset.train_test_exp, 
-                                   cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta,
-                                   retain_grad=False, get_flag = get_flag, metric_map = metric_map)
+        render_pkg = render(view_cam, gaussians, pipe, bg, separate_sh=SPARSE_ADAM_AVAILABLE, render_size=gt_image.shape[-2:], use_trained_exp=dataset.train_test_exp, 
+                            cam_rot_delta=cam_rot_delta, cam_trans_delta=cam_trans_delta, retain_grad=False, get_flag=get_flag, metric_map=metric_map)
 
         accum_loss_counts = render_pkg["accum_metric_counts"]
 

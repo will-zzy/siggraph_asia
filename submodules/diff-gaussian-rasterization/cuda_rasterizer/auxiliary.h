@@ -390,14 +390,11 @@ throw std::runtime_error(cudaGetErrorString(ret)); \
 } \
 }
 
-#endif
-
-
-#define KSYNC(tag) do {                                      \
-  cudaError_t _e = cudaDeviceSynchronize();                  \
-  if (_e != cudaSuccess) {                                   \
-    fprintf(stderr, "[%s] CUDA error: %s\n", tag,            \
-            cudaGetErrorString(_e));                         \
-    return std::make_tuple(0, 0);                            \
-  }                                                          \
+#define KSYNC(tag) do { \
+cudaError_t _e = cudaDeviceSynchronize(); \
+if (_e != cudaSuccess) { \
+fprintf(stderr, "[%s] CUDA error: %s\n", tag, cudaGetErrorString(_e)); \
+return std::make_tuple(0, 0); } \
 } while(0)
+
+#endif

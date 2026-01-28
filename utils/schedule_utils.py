@@ -53,10 +53,6 @@ class TrainingScheduler():
 		# 													 lr_delay_mult=opt.xyz_lr_delay_mult, 
 		# 													 max_steps=opt.xyz_lr_max_steps, 
 		# 													 decay_from_iter=self.lr_decay_from_iter())
-			# gaussians.offset_scheduler_args = get_expon_lr_func(lr_init=opt.offset_lr_init*self.spatial_lr_scale,
-            #                                         lr_final=opt.offset_lr_final*self.spatial_lr_scale,
-            #                                         lr_delay_mult=opt.offset_lr_delay_mult,
-            #                                         max_steps=opt.offset_lr_max_steps)
 	
 	def update_momentum(self, momentum_step):
 		if self.momentum == -1:

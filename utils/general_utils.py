@@ -68,7 +68,6 @@ def get_expon_lr_func(
             return 0.0
         t = np.clip((step - decay_from_iter) / (max_steps - decay_from_iter), 0, 1)
         log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
-        # return delay_rate * log_lerp
         return log_lerp
 
     return helper if decay_from_iter == 0 else helper_dashgaussian

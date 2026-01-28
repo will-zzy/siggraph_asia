@@ -26,8 +26,6 @@ class Camera(nn.Module):
 
         self.uid = uid
         self.colmap_id = colmap_id
-        # self.R = R
-        # self.T = T
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
@@ -49,13 +47,11 @@ class Camera(nn.Module):
         
         self.R = torch.tensor(R, device=self.data_device).float()
         self.T = torch.tensor(T, device=self.data_device).float()
-        # 位姿优化
         
         
         
         resized_image_rgb = PILtoTorch(image, resolution)
         gt_image = resized_image_rgb[:3, ...]
-        
         
         # we don't need mask, so that it can be removed to save memory
         # self.alpha_mask = None
@@ -74,8 +70,6 @@ class Camera(nn.Module):
         self.image_width = self.original_image.shape[2]
         self.image_height = self.original_image.shape[1]
 
-        # inv_depth_path = 
-        # self.invdepthmap = np.load("")
         self.depth_reliable = False
         if invdepthmap is not None:
             self.invdepthmap = cv2.resize(invdepthmap, resolution)
@@ -92,10 +86,8 @@ class Camera(nn.Module):
         self.trans = trans
         self.scale = scale
 
-        # self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
-        # self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
-        # self.camera_center = self.world_view_transform.inverse()[3, :3]
+        
     def update_RT(self, R, t):
         self.R = R.to(device=self.data_device)
         self.T = t.to(device=self.data_device)

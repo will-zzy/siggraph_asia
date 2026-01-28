@@ -180,10 +180,10 @@ def apply_similarity_transform_to_gaussians(
     gaussians, transform: np.ndarray, rotation: np.ndarray = None, translation: np.ndarray = None, scale: float = None
 ) -> dict:
     """
-    Apply a similarity transform to a GaussianModel_origin instance in-place.
+    Apply a similarity transform to a GaussianModel instance in-place.
 
     Args:
-        gaussians: The GaussianModel_origin containing xyz positions, scaling, and rotation.
+        gaussians: The GaussianModel containing xyz positions, scaling, and rotation.
         transform: 4x4 homogeneous matrix with optional uniform scale embedded.
 
     Returns:

@@ -17,3 +17,6 @@ model.safetensors*
 *.pt
 eval_logs
 *.run
+.vscode/launch.json
+.vscode/settings.json
+.vscode/c_cpp_properties.json

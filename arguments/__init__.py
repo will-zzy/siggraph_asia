@@ -47,13 +47,6 @@ class ParamGroup:
 class ModelParams(ParamGroup): 
     def __init__(self, parser, sentinel=False):
         self.sh_degree = 3
-        self.feat_dim = 32
-        self.n_offsets = 10
-        self.voxel_size =  0.001 # if voxel_size<=0, using 1nn dist
-        self.update_depth = 3
-        self.update_init_factor = 16
-        self.update_hierachy_factor = 4
-        self.use_feat_bank = False
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
@@ -64,10 +57,6 @@ class ModelParams(ParamGroup):
         self.data_device = "cuda"
         self.eval = False
         self.appearance_dim = 32
-        self.ratio = 1 # sampling the input point cloud
-        self.add_opacity_dist = False
-        self.add_cov_dist = False
-        self.add_color_dist = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -85,19 +74,12 @@ class PipelineParams(ParamGroup):
         self.resolution_mode = "const"
         self.densify_mode = "free"
         self.max_n_gaussian = -1
-        self.useFF = False
-        self.useScaffold = False
         self.FF_downsample=8
-        self.max_n_gaussian=4000000
         super().__init__(parser, "Pipeline Parameters")
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         self.iterations = 12_000
-        self.position_lr_init = 0.0 # anchor
-        self.position_lr_final = 0.0
-        self.position_lr_delay_mult = 0.01
-        self.position_lr_max_steps = 30_000
         
         self.offset_lr_init = 0.01
         self.offset_lr_final = 0.0001
