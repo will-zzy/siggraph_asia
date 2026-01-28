@@ -94,9 +94,8 @@ for case in "${CASES[@]}"; do
         --images images_gt_downsampled \
         --log_file $LOG_FILE \
         --max_n_gaussian $max_n_gaussian \
-        --iterations $iterations \
-        --use_pose_optimization
-        # --useFF
+        --iterations $iterations 
+        # --use_pose_optimization
         # -m debugpy --wait-for-client --listen localhost:5685 \
 
         # rm -r $model_dir/mono_depths

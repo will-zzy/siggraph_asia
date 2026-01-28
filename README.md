@@ -103,7 +103,7 @@ Per-scene quantitative results are aggregated in `${EXP_DIR}/metrics_train.json`
 
 #### Directory Layout Example
 
-```
+```bash
   $EXP_DIR
     ├── <scene_1>
     ...
@@ -115,6 +115,25 @@ Per-scene quantitative results are aggregated in `${EXP_DIR}/metrics_train.json`
         ├── images
         ├── sparse/0
         └── train_test_split.json
+```
+
+The file structure of `train_test_split.json`:
+
+```json
+{
+    "train": [
+        "000000.png",
+        "000003.png",
+        ...,
+        "000199.png"
+    ],
+    "test": [
+        "000001.png",
+        "000002.png",
+        ...,
+        "000193.png"
+    ]
+}
 ```
 
 #### Heads-up on hardware variability
